@@ -122,7 +122,10 @@ fn get_simulation_params(
 
     let max_external_steps = content.lines().count().saturating_sub(2);
 
-    let reference_time = NaiveDateTime::parse_from_str("2000-01-01 00:00:00", "%Y-%m-%d %H:%M:%S")
+    let line = content.lines().nth(1).unwrap();
+    let time = line.split(',').nth(1).unwrap();
+
+    let reference_time = NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S")
         .context("Failed to parse reference time")?;
 
     Ok((max_external_steps, reference_time))
