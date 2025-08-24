@@ -2,7 +2,7 @@ use crate::config::{ChannelParams, ColumnConfig};
 use crate::state::NodeStatus;
 use anyhow::{Context, Result};
 use rusqlite::Connection;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -210,7 +210,7 @@ pub fn build_network_topology(
     Ok(topology)
 }
 
-// Fetch all channel parameters in a single query
+// Fetch all channel parameters and filter in memory
 pub fn load_channel_parameters(
     conn: &Connection,
     topology: &NetworkTopology,
@@ -225,14 +225,13 @@ pub fn load_channel_parameters(
         topology.routing_order.len()
     );
 
-    // Build single query for all IDs
-    let wb_ids = topology.routing_order.iter().map(|id| format!("wb-{}", id));
+    // Create a HashSet for O(1) lookups
+    let needed_ids: HashSet<u32> = topology.routing_order.iter().cloned().collect();
 
-    let placeholders = vec!["?"; wb_ids.len()].join(",");
-
+    // Query all rows without WHERE clause
     let query = format!(
         "SELECT {0}, {1}, {2}, {3}, {4}, {5}, {6}, {7}, {8} \
-         FROM 'flowpath-attributes' WHERE {0} IN ({9})",
+         FROM 'flowpath-attributes'",
         config.key,
         config.dx,
         config.n,
@@ -241,17 +240,16 @@ pub fn load_channel_parameters(
         config.bw,
         config.tw,
         config.twcc,
-        config.cs,
-        placeholders
+        config.cs
     );
 
     let mut stmt = conn
         .prepare(&query)
         .context("Failed to prepare channel params query")?;
 
-    // Execute query and collect results
-    let params_vec: Vec<_> = stmt
-        .query_map(rusqlite::params_from_iter(wb_ids), |row| {
+    // Execute query and filter results in memory
+    let channel_params_map: HashMap<u32, ChannelParams> = stmt
+        .query_map([], |row| {
             let wb_id: String = row.get(0)?;
             let id = wb_id
                 .strip_prefix("wb-")
@@ -272,16 +270,21 @@ pub fn load_channel_parameters(
                 },
             ))
         })?
-        .collect::<Result<Vec<_>, _>>()
-        .context("Failed to read channel parameters")?;
-
-    // Build output structures
-    let channel_params_map: HashMap<u32, ChannelParams> = params_vec.into_iter().collect();
+        .filter_map(|result| {
+            result.ok().and_then(|(id, params)| {
+                // Only keep parameters for nodes we need
+                if needed_ids.contains(&id) {
+                    Some((id, params))
+                } else {
+                    None
+                }
+            })
+        })
+        .collect();
 
     // Report results
     let loaded = channel_params_map.len();
     let total = topology.routing_order.len();
-
     println!(
         "Successfully loaded parameters for {}/{} nodes",
         loaded, total

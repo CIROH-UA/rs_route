@@ -62,9 +62,21 @@ fn process_node_all_timesteps(
         .lock()
         .map_err(|e| anyhow::anyhow!("Failed to lock inflow storage: {}", e))?;
 
+    if inflow.len() == 0 && external_flows.len() == 0 {
+        // if these are both empty then just return all zeros to the results
+        results.flow_data = vec![0.0; max_timesteps];
+        results.velocity_data = vec![0.0; max_timesteps];
+        results.depth_data = vec![0.0; max_timesteps];
+        return Ok(results);
+    }
+
     // if headwater then upstream inflow is 0.0
     if inflow.len() == 0 {
         inflow.resize(max_timesteps, 0.0);
+    }
+
+    if external_flows.len() == 0 {
+        external_flows.resize(max_timesteps, 0.0);
     }
 
     let mut qup = 0.0;

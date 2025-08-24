@@ -37,28 +37,31 @@ pub fn load_external_flows(
 
     let qlat_index = match var_name {
         Some(var_name) => {
-            let headers = rdr.headers()
-                .context("Failed to read CSV headers")?;
+            let headers = rdr.headers().context("Failed to read CSV headers")?;
             headers.iter().position(|h| h == var_name).unwrap_or(2)
         }
         None => 2,
     };
 
     for (i, result) in rdr.records().enumerate() {
-        let record = result
-            .with_context(|| format!("Failed to read record {} in file {}", i, csv_file.display()))?;
-        
-        let ql_str = record.get(qlat_index)
+        let record = result.with_context(|| {
+            format!("Failed to read record {} in file {}", i, csv_file.display())
+        })?;
+
+        let ql_str = record
+            .get(qlat_index)
             .ok_or_else(|| anyhow::anyhow!("Missing column {} in record {}", qlat_index, i))?;
-        
-        let ql = ql_str.trim().parse::<f32>()
+
+        let ql = ql_str
+            .trim()
+            .parse::<f32>()
             .with_context(|| format!("Failed to parse flow value '{}' in record {}", ql_str, i))?;
 
         // https://github.com/CIROH-UA/ngen/blob/ed2a903730467fa631716c033b757c3dff5fa2bb/include/core/Layer.hpp#L142
         let adjusted_flow = (ql * (area * 1_000_000.0)) / 3600.0;
         external_flows.push(adjusted_flow);
     }
-    
+
     Ok(VecDeque::from(external_flows))
 }
 
