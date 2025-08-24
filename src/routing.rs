@@ -75,6 +75,7 @@ fn process_node_all_timesteps(
 
     let mut external_flow = 0.0;
     let mut upstream_flow = 0.0;
+
     for _timestep in 0..max_timesteps {
         if _timestep % upsampling == 0 {
             external_flow = external_flows.pop_front().ok_or_else(|| {

@@ -65,7 +65,7 @@ fn main() -> Result<()> {
     // Initialize NetCDF output
     // skip the 0th timestep
     let timesteps: Vec<f64> = (1..=max_external_steps)
-        .map(|step| (step * 3600) as f64)
+        .map(|step| (step * external_timestep_seconds) as f64)
         .collect();
 
     let nc_filename = format!("troute_output_{}.nc", reference_time.format("%Y%m%d%H%M"));
