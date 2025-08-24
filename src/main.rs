@@ -54,7 +54,7 @@ fn main() -> Result<()> {
 
     let external_timestep_seconds = 3600;
     let total_timesteps =
-        (max_external_steps + 1) * (external_timestep_seconds / internal_timestep_seconds);
+        (max_external_steps) * (external_timestep_seconds / internal_timestep_seconds);
 
     println!("\nSimulation Configuration:");
     println!("  Period: {} to {}", start_time, end_time);
@@ -63,16 +63,18 @@ fn main() -> Result<()> {
     println!("  Total timesteps: {}", total_timesteps);
 
     // Initialize NetCDF output
-    let timesteps: Vec<f64> = (0..=max_external_steps)
+    // skip the 0th timestep
+    let timesteps: Vec<f64> = (1..=max_external_steps)
         .map(|step| (step * 3600) as f64)
         .collect();
+    let first_timestep = reference_time + Duration::seconds(external_timestep_seconds as i64);
 
     let nc_filename = format!("troute_output_{}.nc", reference_time.format("%Y%m%d%H%M"));
     let netcdf_writer = init_netcdf_output(
         &nc_filename,
         topology.routing_order.len(),
         timesteps,
-        &reference_time,
+        &first_timestep,
     )?;
 
     // Create progress bar

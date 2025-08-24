@@ -57,17 +57,21 @@ fn process_node_all_timesteps(
     } else {
         channel_params.s0
     };
-
     let mut inflow = node
         .inflow_storage
         .lock()
         .map_err(|e| anyhow::anyhow!("Failed to lock inflow storage: {}", e))?;
 
+    // if headwater then upstream inflow is 0.0
+    if inflow.len() == 0 {
+        inflow.resize(max_timesteps, 0.0);
+    }
+
     let mut qup = 0.0;
     let mut qdp = 0.0;
     let mut depth_p = 0.0;
-
-    let upsampling = max_timesteps / external_flows.len();
+    // -1 because the input files have one additional timestep
+    let upsampling = max_timesteps / (external_flows.len() - 1);
 
     let mut external_flow = 0.0;
     let mut upstream_flow = 0.0;
@@ -82,7 +86,9 @@ fn process_node_all_timesteps(
                 )
             })?;
         }
-        upstream_flow = inflow.pop_front().unwrap_or(0.0);
+        dbg!(_timestep);
+        dbg!(external_flow);
+        upstream_flow = inflow.pop_front().unwrap();
 
         let (qdc, velc, depthc, _, _, _) = mc_kernel::submuskingcunge(
             qup,

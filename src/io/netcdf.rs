@@ -107,14 +107,10 @@ pub fn write_output(
     let mut downsampled_flow_data = Vec::with_capacity(expected_timesteps.len());
     let mut downsampled_velocity_data = Vec::with_capacity(expected_timesteps.len());
     let mut downsampled_depth_data = Vec::with_capacity(expected_timesteps.len());
-    for i in 0..actual_timesteps {
-        let d = i * downsampling;
-        if d >= results.flow_data.len() {
-            continue;
-        }
-        downsampled_flow_data.push(results.flow_data[d]);
-        downsampled_velocity_data.push(results.velocity_data[d]);
-        downsampled_depth_data.push(results.depth_data[d]);
+    for i in (downsampling - 1..actual_timesteps).step_by(downsampling) {
+        downsampled_flow_data.push(results.flow_data[i]);
+        downsampled_velocity_data.push(results.velocity_data[i]);
+        downsampled_depth_data.push(results.depth_data[i]);
     }
 
     // Get feature variable
