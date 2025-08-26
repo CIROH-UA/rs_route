@@ -5,11 +5,12 @@ use crate::io::results::SimulationResults;
 use crate::mc_kernel;
 use crate::network::NetworkTopology;
 use crate::state::NodeStatus;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use indicatif::ProgressBar;
 use netcdf::FileMut;
+use std::cmp::min;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -394,7 +395,7 @@ pub fn process_routing_parallel(
     // Spawn writer thread
     let output_file_clone = Arc::clone(&output_file);
     let writer_handle = thread::spawn(move || {
-        if let Err(e) = writer_thread(writer_rx, output_file_clone, 100) {
+        if let Err(e) = writer_thread(writer_rx, output_file_clone, min(100, total_nodes)) {
             eprintln!("Writer thread error: {}", e);
         }
     });
