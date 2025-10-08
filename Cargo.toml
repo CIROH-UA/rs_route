@@ -5,6 +5,13 @@ edition = "2024"
 description = "A cli tool for muskingum-cunge routing in ngiab"
 license = "AGPL-3.0"
 
+[build-dependencies]
+anyhow = "*"
+
+[[bin]]
+name = "force-build"
+path = "build.rs"
+
 [dependencies]
 anyhow = "1.0.98"
 chrono = "0.4.41"

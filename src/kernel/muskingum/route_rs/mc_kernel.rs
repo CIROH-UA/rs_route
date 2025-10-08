@@ -1,5 +1,9 @@
 use rusqlite::CachedStatement;
 
+use crate::kernel::muskingum::MuskingumCungeResult;
+
+
+
 /// Optimized Muskingum-Cunge routing implementation matching Fortran NWM version
 pub fn submuskingcunge(
     qup: f32,                // flow upstream previous timestep
@@ -17,7 +21,7 @@ pub fn submuskingcunge(
     n_cc: f32,               // mannings of compound
     depth_p: f32,            // depth of flow in channel
     calculate_courant: bool, // whether to calculate courant number
-) -> (f32, f32, f32, f32, f32, f32) {
+) -> MuskingumCungeResult {
     // Returns (qdc, velc, depthc, ck, cn, x)
 
     // Precompute constants
@@ -40,14 +44,14 @@ pub fn submuskingcunge(
         panic!("Error in channel coefficients");
     }
 
-    let mut depth_c = depth_p.max(0.0);
+    let mut depthc = depth_p.max(0.0);
 
     if ql <= 0.0 && qup <= 0.0 && quc <= 0.0 && qdp <= 0.0 {
-        return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        return MuskingumCungeResult::default();
     }
 
-    let mut h = (depth_c * 1.33) + 0.01;
-    let mut h_0 = depth_c * 0.67;
+    let mut h = (depthc * 1.33) + 0.01;
+    let mut h_0 = depthc * 0.67;
     let mut tries = 0;
     let mut maxiter = 100;
     let mindepth = 0.01;
@@ -283,16 +287,16 @@ pub fn submuskingcunge(
     let twl = bw + 2.0 * z * h;
     let r = (h * (bw + twl) * 0.5) / (bw + 2.0 * (((twl - bw) * 0.5).powi(2) + h.powi(2)).sqrt());
     let velc = (1.0 / n) * r.powf(2.0 / 3.0) * sqrt_so;
-    depth_c = h;
+    depthc = h;
 
     // Calculate Courant number
-    let (mut ck, cn) = if depth_c > 0.0 && calculate_courant {
-        let mut h_gt_bf = (depth_c - bfd).max(0.0);
-        let mut h_lt_bf = bfd.min(depth_c);
+    let (mut ck, cn) = if depthc > 0.0 && calculate_courant {
+        let mut h_gt_bf = (depthc - bfd).max(0.0);
+        let mut h_lt_bf = bfd.min(depthc);
 
         if h_gt_bf > 0.0 && tw_cc <= 0.0 {
             h_gt_bf = 0.0;
-            h_lt_bf = depth_c;
+            h_lt_bf = depthc;
         }
 
         let area = (bw + h_lt_bf * z) * h_lt_bf;
@@ -320,6 +324,5 @@ pub fn submuskingcunge(
     } else {
         (0.0, 0.0)
     };
-
-    (qdc, velc, depth_c, ck, cn, x)
+    MuskingumCungeResult { qdc, velc, depthc, ck, cn, x }
 }

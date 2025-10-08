@@ -2,6 +2,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, command};
 use std::path::PathBuf;
 
+use crate::kernel::muskingum::MuskingumCungeKernel;
+
 /// Network routing simulation tool
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -12,9 +14,20 @@ struct Args {
     /// Internal timestep in seconds
     #[arg(short, long, default_value_t = 300)]
     internal_timestep_seconds: usize,
+    #[arg(short, long, default_value_t = MuskingumCungeKernel::TRouteModernized)]
+    kernel: MuskingumCungeKernel,
 }
 
-pub fn get_args() -> Result<(PathBuf, PathBuf, PathBuf, usize, PathBuf)> {
+pub struct Config {
+    pub config_dir: PathBuf,
+    pub csv_dir: PathBuf,
+    pub gpkg_file: PathBuf,
+    pub internal_timestep_seconds: usize,
+    pub output_dir: PathBuf,
+    pub kernel: MuskingumCungeKernel
+}
+
+pub fn get_args() -> Result<Config> {
     let args = Args::parse();
 
     let root_dir = args.route_dir;
@@ -31,11 +44,5 @@ pub fn get_args() -> Result<(PathBuf, PathBuf, PathBuf, usize, PathBuf)> {
         .ok_or_else(|| anyhow::anyhow!("No .gpkg file found in config directory"))?
         .path();
 
-    Ok((
-        config_dir,
-        csv_dir,
-        gpkg_file,
-        args.internal_timestep_seconds,
-        output_dir,
-    ))
+    Ok(Config {config_dir, csv_dir, gpkg_file, internal_timestep_seconds: args.internal_timestep_seconds, output_dir, kernel: args.kernel})
 }

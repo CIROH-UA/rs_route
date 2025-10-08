@@ -2,7 +2,8 @@ use crate::config::ChannelParams;
 use crate::io::csv::load_external_flows;
 use crate::io::netcdf::{write_batch, write_output};
 use crate::io::results::SimulationResults;
-use crate::mc_kernel;
+use crate::kernel::muskingum::MuskingumCungeKernel;
+use crate::{kernel};
 use crate::network::NetworkTopology;
 use crate::state::NodeStatus;
 use anyhow::Result;
@@ -33,6 +34,7 @@ enum SchedulerMessage {
 
 // Process all timesteps for a single node (unchanged)
 fn process_node_all_timesteps(
+    kernel: MuskingumCungeKernel,
     node_id: &u32,
     topology: &NetworkTopology,
     channel_params: &ChannelParams,
@@ -101,7 +103,7 @@ fn process_node_all_timesteps(
         }
         upstream_flow = inflow.pop_front().unwrap();
 
-        let (qdc, velc, depthc, _, _, _) = mc_kernel::submuskingcunge(
+        let result = kernel.exec(
             qup,
             upstream_flow,
             qdp,
@@ -118,6 +120,24 @@ fn process_node_all_timesteps(
             depth_p,
             false,
         );
+        let (qdc, velc, depthc) = (result.qdc, result.velc, result.depthc);
+        // let (qdc, velc, depthc, _, _, _) = mc_kernel::submuskingcunge(
+        //     qup,
+        //     upstream_flow,
+        //     qdp,
+        //     external_flow,
+        //     dt,
+        //     s0,
+        //     channel_params.dx,
+        //     channel_params.n,
+        //     channel_params.cs,
+        //     channel_params.bw,
+        //     channel_params.tw,
+        //     channel_params.twcc,
+        //     channel_params.ncc,
+        //     depth_p,
+        //     false,
+        // );
 
         results.flow_data.push(qdc);
         results.velocity_data.push(velc);
@@ -254,6 +274,7 @@ fn scheduler_thread(
 
 // Worker thread - now just receives work and processes it
 fn worker_thread(
+    kernel: MuskingumCungeKernel,
     work_rx: Receiver<WorkerMessage>,
     scheduler_tx: Sender<SchedulerMessage>,
     topology: Arc<NetworkTopology>,
@@ -268,7 +289,7 @@ fn worker_thread(
             Ok(WorkerMessage::ProcessNode(node_id)) => {
                 // Process the node
                 if let Some(params) = channel_params_map.get(&node_id) {
-                    match process_node_all_timesteps(&node_id, &topology, params, max_timesteps, dt)
+                    match process_node_all_timesteps(kernel, &node_id, &topology, params, max_timesteps, dt)
                     {
                         Ok(results) => {
                             let results_arc = Arc::new(results);
@@ -342,6 +363,7 @@ fn worker_thread(
 
 // Main parallel routing function
 pub fn process_routing_parallel(
+    kernel: MuskingumCungeKernel,
     topology: &NetworkTopology,
     channel_params_map: &HashMap<u32, ChannelParams>,
     max_timesteps: usize,
@@ -380,7 +402,7 @@ pub fn process_routing_parallel(
         let pb = Arc::clone(&progress_bar);
 
         let handle = thread::spawn(move || {
-            if let Err(e) = worker_thread(
+            if let Err(e) = worker_thread(kernel,
                 work_rx,
                 scheduler,
                 topo,

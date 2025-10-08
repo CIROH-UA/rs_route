@@ -7,10 +7,13 @@ use std::sync::Arc;
 mod cli;
 mod config;
 mod io;
-mod mc_kernel;
+
 mod network;
 mod routing;
 mod state;
+pub mod kernel {
+    pub mod muskingum;
+}
 
 use cli::get_args;
 use config::{ChannelParams, ColumnConfig, OutputFormat};
@@ -20,8 +23,11 @@ use routing::process_routing_parallel;
 
 fn main() -> Result<()> {
     // Configuration
-    let (_, csv_dir, db_path, internal_timestep_seconds, output_dir) = get_args()?;
-    let dt = internal_timestep_seconds as f32;
+    //let (_, csv_dir, db_path, internal_timestep_seconds, output_dir) 
+    let config = get_args()?;
+    let dt = config.internal_timestep_seconds as f32;
+    let db_path = config.gpkg_file;
+    let csv_dir = config.csv_dir;
     let output_format = OutputFormat::NetCdf;
 
     // Initialize SQLite connection
@@ -54,11 +60,11 @@ fn main() -> Result<()> {
 
     let external_timestep_seconds = 3600;
     let total_timesteps =
-        (max_external_steps) * (external_timestep_seconds / internal_timestep_seconds);
+        (max_external_steps) * (external_timestep_seconds / config.internal_timestep_seconds);
 
     println!("\nSimulation Configuration:");
     println!("  Period: {} to {}", start_time, end_time);
-    println!("  Internal timestep: {} seconds", internal_timestep_seconds);
+    println!("  Internal timestep: {} seconds", config.internal_timestep_seconds);
     println!("  Network nodes: {}", topology.routing_order.len());
     println!("  Total timesteps: {}", total_timesteps);
 
@@ -70,7 +76,7 @@ fn main() -> Result<()> {
 
     let nc_filename = format!("troute_output_{}.nc", reference_time.format("%Y%m%d%H%M"));
     let netcdf_writer = init_netcdf_output(
-        output_dir,
+        config.output_dir,
         &nc_filename,
         topology.routing_order.len(),
         timesteps,
@@ -87,7 +93,7 @@ fn main() -> Result<()> {
 
     // Run parallel routing
     println!("\nStarting parallel wave-front routing...");
-    process_routing_parallel(
+    process_routing_parallel(config.kernel,
         &topology,
         &channel_params_map,
         total_timesteps,
