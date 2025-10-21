@@ -2,8 +2,6 @@ use rusqlite::CachedStatement;
 
 use crate::kernel::muskingum::MuskingumCungeResult;
 
-
-
 /// Optimized Muskingum-Cunge routing implementation matching Fortran NWM version
 pub fn submuskingcunge(
     qup: f32,                // flow upstream previous timestep

@@ -11,11 +11,17 @@ fn main() -> anyhow::Result<()> {
     let project_dir = PathBuf::from(project_dir);
     let out_dir = PathBuf::from(out_dir);
     let out_dir_str = out_dir.to_str().expect("Failed to get canonical out-dir");
-    let project_dir_str = project_dir.to_str().expect("Failed to get canonical project-dir");
+    let project_dir_str = project_dir
+        .to_str()
+        .expect("Failed to get canonical project-dir");
     let fortran_build_dir = out_dir.join("muskingum_cunge");
-    let fortran_build_dir_str = fortran_build_dir.to_str().expect("Failed to get canonical fortran-build-dir");
+    let fortran_build_dir_str = fortran_build_dir
+        .to_str()
+        .expect("Failed to get canonical fortran-build-dir");
     let fortran_src_dir = project_dir.join("src/kernel/muskingum/t-route");
-    let fortran_src_dir_str = fortran_src_dir.to_str().expect("Failed to get canonical t-route src dir");
+    let fortran_src_dir_str = fortran_src_dir
+        .to_str()
+        .expect("Failed to get canonical t-route src dir");
     //let fortran_build_dir = format!("{}/muskingum_cunge", out_dir.to_str().unwrap());
     create_dir_all(&fortran_build_dir)?;
 
@@ -26,49 +32,59 @@ fn main() -> anyhow::Result<()> {
     for file in ["muskingum_cunge.f90"] {
         fortran_src_files.push_str(&format!(" {fortran_src_dir_str}/{file}"));
     }
-     for file in ["bind.f90"] {
+    for file in ["bind.f90"] {
         fortran_src_files.push_str(&format!(" {fortran_src_dir_str}/{file}"));
     }
-    
+
     let test_gfortran = "gfortran --version";
-    let _gfotran_version = std::process::Command::new("sh").args(["-c", &test_gfortran])
-        .output().expect("\n\x1b[31m'gfortran --version' failed, check that it is installed\x1b[0m\n\n");
+    let _gfotran_version = std::process::Command::new("sh")
+        .args(["-c", &test_gfortran])
+        .output()
+        .expect("\n\x1b[31m'gfortran --version' failed, check that it is installed\x1b[0m\n\n");
 
-    let command_string_compile = format!("gfortran -g -c -O2  -lgfortran -lgcc -static-libgfortran -static-libgcc -nodefaultlibs {fortran_src_files} -J.");
+    let command_string_compile = format!(
+        "gfortran -g -c -O2  -lgfortran -lgcc -static-libgfortran -static-libgcc -nodefaultlibs {fortran_src_files} -J."
+    );
 
-    let _output_compile =  std::process::Command::new("sh").current_dir(&fortran_build_dir)
-        .args([
-            "-c", 
-            &command_string_compile])
-        .output().expect("\n\x1b[31mFortran compilation failed\x1b[0m\n\n");
+    let _output_compile = std::process::Command::new("sh")
+        .current_dir(&fortran_build_dir)
+        .args(["-c", &command_string_compile])
+        .output()
+        .expect("\n\x1b[31mFortran compilation failed\x1b[0m\n\n");
 
     //println!("{:#?}",output);
     //println!("{command_string_compile}");
 
     let _output_compile_c =  std::process::Command::new("sh").current_dir(&fortran_build_dir)
         .args([
-            "-c", 
+            "-c",
             &format!("gcc -g -c -O2 -fPIC -ffast-math {project_dir_str}/src/kernel/muskingum/c_mc/muskingumcunge.c")])
         .output().expect("C compilation failed");
-    
+
     println!("{_output_compile_c:#?}");
 
     let mut fortran_obj_files = String::new();
-    for file in ["MCsingleSegStime_f2py_NOLOOP.o", "varPrecision.o", "muskingum_cunge.o", "bind.o"] {
-        fortran_obj_files.push_str(&format!(" {file}"));//&format!(" {fortran_src_dir_str}/t-route-legacy/{file}"));
+    for file in [
+        "MCsingleSegStime_f2py_NOLOOP.o",
+        "varPrecision.o",
+        "muskingum_cunge.o",
+        "bind.o",
+    ] {
+        fortran_obj_files.push_str(&format!(" {file}")); //&format!(" {fortran_src_dir_str}/t-route-legacy/{file}"));
     }
 
-    let command_string_link = format!("ar rcs {out_dir_str}/libfortran_muskingum.a {fortran_build_dir_str}/muskingumcunge.o {fortran_obj_files}");
+    let command_string_link = format!(
+        "ar rcs {out_dir_str}/libfortran_muskingum.a {fortran_build_dir_str}/muskingumcunge.o {fortran_obj_files}"
+    );
 
-    let _output_link =  std::process::Command::new("sh").current_dir(&fortran_build_dir)
-        .args([
-            "-c", 
-            &command_string_link])
-        .output().expect("Fortrain linking failed");
+    let _output_link = std::process::Command::new("sh")
+        .current_dir(&fortran_build_dir)
+        .args(["-c", &command_string_link])
+        .output()
+        .expect("Fortrain linking failed");
 
     //println!("{_output_compile:#?} \n\n\n {_output_link:#?}");
 
-    
     assert!(_output_compile.status.success());
     assert!(_output_compile_c.status.success());
     assert!(_output_link.status.success());

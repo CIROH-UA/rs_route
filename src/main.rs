@@ -23,7 +23,7 @@ use routing::process_routing_parallel;
 
 fn main() -> Result<()> {
     // Configuration
-    //let (_, csv_dir, db_path, internal_timestep_seconds, output_dir) 
+    //let (_, csv_dir, db_path, internal_timestep_seconds, output_dir)
     let config = get_args()?;
     let dt = config.internal_timestep_seconds as f32;
     let db_path = config.gpkg_file;
@@ -64,7 +64,10 @@ fn main() -> Result<()> {
 
     println!("\nSimulation Configuration:");
     println!("  Period: {} to {}", start_time, end_time);
-    println!("  Internal timestep: {} seconds", config.internal_timestep_seconds);
+    println!(
+        "  Internal timestep: {} seconds",
+        config.internal_timestep_seconds
+    );
     println!("  Network nodes: {}", topology.routing_order.len());
     println!("  Total timesteps: {}", total_timesteps);
 
@@ -93,7 +96,8 @@ fn main() -> Result<()> {
 
     // Run parallel routing
     println!("\nStarting parallel wave-front routing...");
-    process_routing_parallel(config.kernel,
+    process_routing_parallel(
+        config.kernel,
         &topology,
         &channel_params_map,
         total_timesteps,

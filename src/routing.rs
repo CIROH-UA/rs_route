@@ -2,8 +2,8 @@ use crate::config::ChannelParams;
 use crate::io::csv::load_external_flows;
 use crate::io::netcdf::{write_batch, write_output};
 use crate::io::results::SimulationResults;
+use crate::kernel;
 use crate::kernel::muskingum::MuskingumCungeKernel;
-use crate::{kernel};
 use crate::network::NetworkTopology;
 use crate::state::NodeStatus;
 use anyhow::Result;
@@ -289,8 +289,14 @@ fn worker_thread(
             Ok(WorkerMessage::ProcessNode(node_id)) => {
                 // Process the node
                 if let Some(params) = channel_params_map.get(&node_id) {
-                    match process_node_all_timesteps(kernel, &node_id, &topology, params, max_timesteps, dt)
-                    {
+                    match process_node_all_timesteps(
+                        kernel,
+                        &node_id,
+                        &topology,
+                        params,
+                        max_timesteps,
+                        dt,
+                    ) {
                         Ok(results) => {
                             let results_arc = Arc::new(results);
 
@@ -402,7 +408,8 @@ pub fn process_routing_parallel(
         let pb = Arc::clone(&progress_bar);
 
         let handle = thread::spawn(move || {
-            if let Err(e) = worker_thread(kernel,
+            if let Err(e) = worker_thread(
+                kernel,
                 work_rx,
                 scheduler,
                 topo,

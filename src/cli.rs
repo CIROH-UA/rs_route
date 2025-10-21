@@ -24,7 +24,7 @@ pub struct Config {
     pub gpkg_file: PathBuf,
     pub internal_timestep_seconds: usize,
     pub output_dir: PathBuf,
-    pub kernel: MuskingumCungeKernel
+    pub kernel: MuskingumCungeKernel,
 }
 
 pub fn get_args() -> Result<Config> {
@@ -44,5 +44,12 @@ pub fn get_args() -> Result<Config> {
         .ok_or_else(|| anyhow::anyhow!("No .gpkg file found in config directory"))?
         .path();
 
-    Ok(Config {config_dir, csv_dir, gpkg_file, internal_timestep_seconds: args.internal_timestep_seconds, output_dir, kernel: args.kernel})
+    Ok(Config {
+        config_dir,
+        csv_dir,
+        gpkg_file,
+        internal_timestep_seconds: args.internal_timestep_seconds,
+        output_dir,
+        kernel: args.kernel,
+    })
 }
