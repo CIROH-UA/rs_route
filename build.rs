@@ -29,6 +29,10 @@ fn main() -> anyhow::Result<()> {
      for file in ["bind.f90"] {
         fortran_src_files.push_str(&format!(" {fortran_src_dir_str}/{file}"));
     }
+    
+    let test_gfortran = "gfortran --version";
+    let _gfotran_version = std::process::Command::new("sh").args(["-c", &test_gfortran])
+        .output().expect("\n\x1b[31m'gfortran --version' failed, check that it is installed\x1b[0m\n\n");
 
     let command_string_compile = format!("gfortran -g -c -O2  -lgfortran -lgcc -static-libgfortran -static-libgcc -nodefaultlibs {fortran_src_files} -J.");
 
@@ -36,7 +40,7 @@ fn main() -> anyhow::Result<()> {
         .args([
             "-c", 
             &command_string_compile])
-        .output().expect("Fortrain compilation failed");
+        .output().expect("\n\x1b[31mFortran compilation failed\x1b[0m\n\n");
 
     //println!("{:#?}",output);
     //println!("{command_string_compile}");
