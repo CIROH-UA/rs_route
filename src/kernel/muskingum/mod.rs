@@ -129,7 +129,7 @@ impl MuskingumCungeKernel {
         depth_p: f32,           
         calculate_courant: bool,
     ) -> MuskingumCungeResult {
-        println!("running kernel: {self}");
+        // println!("running kernel: {self}");
         match self {
             MuskingumCungeKernel::RouteRs => mc_kernel::submuskingcunge(qup, quc, qdp, ql, dt, so, dx, n, cs, bw, tw, tw_cc, n_cc, depth_p, calculate_courant),
             MuskingumCungeKernel::TRouteModernized => t_route::fortran_modernized::submuskingcunge(qup, quc, qdp, ql, dt, so, dx, n, cs, bw, tw, tw_cc, n_cc, depth_p, calculate_courant),
