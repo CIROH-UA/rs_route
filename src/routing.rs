@@ -2,14 +2,10 @@ use crate::config::ChannelParams;
 use crate::io::csv::load_external_flows;
 use crate::io::netcdf::{write_batch, write_output};
 use crate::io::results::SimulationResults;
-<<<<<<< HEAD
 use crate::kernel;
 use crate::kernel::muskingum::MuskingumCungeKernel;
-=======
 use crate::lstm_flow; // Import the module, not specific types
 use crate::lstm_flow::LstmFlowGenerator;
-use crate::mc_kernel;
->>>>>>> d05b661 (working with lstm but slow)
 use crate::network::NetworkTopology;
 use crate::state::NodeStatus;
 use anyhow::Result;
@@ -18,7 +14,7 @@ use indicatif::ProgressBar;
 use netcdf::FileMut;
 use std::cmp::min;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -74,16 +70,31 @@ fn process_node_all_timesteps(
                         "LSTM generation failed for node {}: {}. Falling back to CSV.",
                         node_id, e
                     );
-                    load_external_flows(node.qlat_file.clone(), &node.id, Some(&"Q_OUT"), area)?
+                    load_external_flows(
+                        node.qlat_file.clone(),
+                        &node.id,
+                        Some(&"land_surface_water__runoff_depth"),
+                        area,
+                    )?
                 }
             }
         } else {
             // No LSTM generator provided, use CSV
-            load_external_flows(node.qlat_file.clone(), &node.id, Some(&"Q_OUT"), area)?
+            load_external_flows(
+                node.qlat_file.clone(),
+                &node.id,
+                Some(&"land_surface_water__runoff_depth"),
+                area,
+            )?
         }
     } else {
         // Use CSV as requested
-        load_external_flows(node.qlat_file.clone(), &node.id, Some(&"Q_OUT"), area)?
+        load_external_flows(
+            node.qlat_file.clone(),
+            &node.id,
+            Some(&"land_surface_water__runoff_depth"),
+            area,
+        )?
     };
 
     let s0 = if channel_params.s0 == 0.0 {
@@ -342,20 +353,14 @@ fn worker_thread(
                 // Process the node
                 if let Some(params) = channel_params_map.get(&node_id) {
                     match process_node_all_timesteps(
-<<<<<<< HEAD
                         kernel,
-=======
->>>>>>> d05b661 (working with lstm but slow)
                         &node_id,
                         &topology,
                         params,
                         max_timesteps,
                         dt,
-<<<<<<< HEAD
-=======
                         lstm_generator.as_ref(),
                         use_lstm && lstm_generator.is_some(),
->>>>>>> d05b661 (working with lstm but slow)
                     ) {
                         Ok(results) => {
                             let results_arc = Arc::new(results);
@@ -438,6 +443,7 @@ pub fn process_routing_parallel(
     progress_bar: Arc<ProgressBar>,
 ) -> Result<()> {
     process_routing_parallel_with_lstm(
+        kernel,
         topology,
         channel_params_map,
         max_timesteps,
@@ -451,14 +457,15 @@ pub fn process_routing_parallel(
 
 // New function that supports LSTM
 pub fn process_routing_parallel_with_lstm(
+    kernel: MuskingumCungeKernel,
     topology: &NetworkTopology,
     channel_params_map: &HashMap<u32, ChannelParams>,
     max_timesteps: usize,
     dt: f32,
     output_file: Arc<Mutex<FileMut>>,
     progress_bar: Arc<ProgressBar>,
-    root_dir: Option<PathBuf>, // Root directory for LSTM config
-    use_lstm: bool,            // Flag to enable LSTM
+    root_dir: Option<&Path>, // Root directory for LSTM config
+    use_lstm: bool,          // Flag to enable LSTM
 ) -> Result<()> {
     let total_nodes = topology.nodes.len();
     let completed_count = Arc::new(AtomicUsize::new(0));
@@ -469,7 +476,7 @@ pub fn process_routing_parallel_with_lstm(
     let lstm_config = if use_lstm {
         if let Some(dir) = root_dir {
             println!("Initializing LSTM configuration...");
-            match lstm_flow::NgenLstmConfig::new(dir) {
+            match lstm_flow::NgenLstmConfig::new(PathBuf::from(dir)) {
                 Ok(config) => Some(Arc::new(config)),
                 Err(e) => {
                     eprintln!(
@@ -492,9 +499,7 @@ pub fn process_routing_parallel_with_lstm(
     let (scheduler_tx, scheduler_rx) = mpsc::channel();
 
     // Create worker channels
-    // let num_threads = 10;
     let num_threads = num_cpus::get();
-
     println!(
         "Using {} worker threads for parallel processing",
         num_threads

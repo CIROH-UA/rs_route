@@ -456,45 +456,6 @@ impl<B: Backend> LstmFlowGenerator<B> {
         Ok(())
     }
 
-    fn internal_to_external_name(&self, internal: &str) -> String {
-        let mapping = [
-            (
-                "DLWRF_surface",
-                "land_surface_radiation~incoming~longwave__energy_flux",
-            ),
-            ("PRES_surface", "land_surface_air__pressure"),
-            (
-                "SPFH_2maboveground",
-                "atmosphere_air_water~vapor__relative_saturation",
-            ),
-            (
-                "APCP_surface",
-                "atmosphere_water__liquid_equivalent_precipitation_rate",
-            ),
-            (
-                "DSWRF_surface",
-                "land_surface_radiation~incoming~shortwave__energy_flux",
-            ),
-            ("TMP_2maboveground", "land_surface_air__temperature"),
-            (
-                "UGRD_10maboveground",
-                "land_surface_wind__x_component_of_velocity",
-            ),
-            (
-                "VGRD_10maboveground",
-                "land_surface_wind__y_component_of_velocity",
-            ),
-            ("elev_mean", "basin__mean_of_elevation"),
-            ("slope_mean", "basin__mean_of_slope"),
-        ];
-
-        mapping
-            .iter()
-            .find(|(k, _)| *k == internal)
-            .map(|(_, v)| v.to_string())
-            .unwrap_or_else(|| internal.to_string())
-    }
-
     pub fn generate_flows_for_node(
         &self,
         node_id: u32,
@@ -553,76 +514,113 @@ impl<B: Backend> LstmFlowGenerator<B> {
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0) as f32;
 
+        // Create a map of all available forcing values
+        let mut forcing_map: HashMap<String, Vec<f32>> = HashMap::new();
+
         // Load forcing variables
-        let spfh = self
-            .forcing_file
-            .variable("SPFH_2maboveground")
-            .ok_or(anyhow::anyhow!("unable to load SPFH_2maboveground"))?;
-        let dswrf = self
-            .forcing_file
-            .variable("DSWRF_surface")
-            .ok_or(anyhow::anyhow!("unable to load DSWRF_surface"))?;
-        let vgrd = self
-            .forcing_file
-            .variable("VGRD_10maboveground")
-            .ok_or(anyhow::anyhow!("unable to load VGRD_10maboveground"))?;
-        let dlwrf = self
-            .forcing_file
-            .variable("DLWRF_surface")
-            .ok_or(anyhow::anyhow!("unable to load DLWRF_surface"))?;
-        let apcp = self
-            .forcing_file
-            .variable("APCP_surface")
-            .ok_or(anyhow::anyhow!("unable to load APCP_surface"))?;
-        let ugrd = self
-            .forcing_file
-            .variable("UGRD_10maboveground")
-            .ok_or(anyhow::anyhow!("unable to load UGRD_10maboveground"))?;
-        let pres = self
-            .forcing_file
-            .variable("PRES_surface")
-            .ok_or(anyhow::anyhow!("unable to load PRES_surface"))?;
-        let tmp = self
-            .forcing_file
-            .variable("TMP_2maboveground")
-            .ok_or(anyhow::anyhow!("unable to load TMP_2maboveground"))?;
+        let forcing_timesteps = self.total_timesteps;
+        let time_range = 0..forcing_timesteps;
+
+        // Load all forcing data into the map using internal names
+        forcing_map.insert(
+            "APCP_surface".to_string(),
+            self.forcing_file
+                .variable("precip_rate")
+                .ok_or(anyhow::anyhow!("Unable to load APCP_surface"))?
+                .get_values((current_index, time_range.clone()))?,
+        );
+        forcing_map.insert(
+            "TMP_2maboveground".to_string(),
+            self.forcing_file
+                .variable("TMP_2maboveground")
+                .ok_or(anyhow::anyhow!("Unable to load TMP_2maboveground"))?
+                .get_values((current_index, time_range.clone()))?,
+        );
+        forcing_map.insert(
+            "DLWRF_surface".to_string(),
+            self.forcing_file
+                .variable("DLWRF_surface")
+                .ok_or(anyhow::anyhow!("Unable to load DLWRF_surface"))?
+                .get_values((current_index, time_range.clone()))?,
+        );
+        forcing_map.insert(
+            "PRES_surface".to_string(),
+            self.forcing_file
+                .variable("PRES_surface")
+                .ok_or(anyhow::anyhow!("Unable to load PRES_surface"))?
+                .get_values((current_index, time_range.clone()))?,
+        );
+        forcing_map.insert(
+            "SPFH_2maboveground".to_string(),
+            self.forcing_file
+                .variable("SPFH_2maboveground")
+                .ok_or(anyhow::anyhow!("Unable to load SPFH_2maboveground"))?
+                .get_values((current_index, time_range.clone()))?,
+        );
+        forcing_map.insert(
+            "DSWRF_surface".to_string(),
+            self.forcing_file
+                .variable("DSWRF_surface")
+                .ok_or(anyhow::anyhow!("Unable to load DSWRF_surface"))?
+                .get_values((current_index, time_range.clone()))?,
+        );
+        forcing_map.insert(
+            "UGRD_10maboveground".to_string(),
+            self.forcing_file
+                .variable("UGRD_10maboveground")
+                .ok_or(anyhow::anyhow!("Unable to load UGRD_10maboveground"))?
+                .get_values((current_index, time_range.clone()))?,
+        );
+        forcing_map.insert(
+            "VGRD_10maboveground".to_string(),
+            self.forcing_file
+                .variable("VGRD_10maboveground")
+                .ok_or(anyhow::anyhow!("Unable to load VGRD_10maboveground"))?
+                .get_values((current_index, time_range))?,
+        );
+
+        // Add static values that are constant for all timesteps
+        forcing_map.insert("elev_mean".to_string(), vec![elevation; forcing_timesteps]);
+        forcing_map.insert("slope_mean".to_string(), vec![slope; forcing_timesteps]);
 
         // Calculate output scale factor
         let output_scale_factor_cms =
             (1.0 / 1000.0) * (area_sqkm * 1000.0 * 1000.0) * (1.0 / 3600.0);
 
-        // Gather all forcing values at once for all timesteps
-        let forcing_timesteps = self.total_timesteps;
-        let time_range = 0..forcing_timesteps;
-
-        let all_apcp: Vec<f32> = apcp.get_values((current_index, time_range.clone()))?;
-        let all_tmp: Vec<f32> = tmp.get_values((current_index, time_range.clone()))?;
-        let all_dlwrf: Vec<f32> = dlwrf.get_values((current_index, time_range.clone()))?;
-        let all_pres: Vec<f32> = pres.get_values((current_index, time_range.clone()))?;
-        let all_spfh: Vec<f32> = spfh.get_values((current_index, time_range.clone()))?;
-        let all_dswrf: Vec<f32> = dswrf.get_values((current_index, time_range.clone()))?;
-        let all_ugrd: Vec<f32> = ugrd.get_values((current_index, time_range.clone()))?;
-        let all_vgrd: Vec<f32> = vgrd.get_values((current_index, time_range))?;
-
-        // Now run each timestep with pre-gathered forcing values
+        // Now run each timestep
         let mut all_flows = VecDeque::new();
         for time_idx in 0..forcing_timesteps {
-            let forcing_values = vec![
-                all_apcp[time_idx],
-                all_tmp[time_idx],
-                all_dlwrf[time_idx],
-                all_pres[time_idx],
-                all_spfh[time_idx],
-                all_dswrf[time_idx],
-                all_ugrd[time_idx],
-                all_vgrd[time_idx],
-                elevation,
-                slope,
-            ];
-
             // Run ensemble
             let mut ensemble_outputs = Vec::new();
             for model_instance in &mut models {
+                // Get the model's expected input order from metadata
+                let input_names = &model_instance.metadata.input_names;
+
+                // Gather inputs in the correct order that the model expects
+                let mut forcing_values = Vec::new();
+                for input_name in input_names {
+                    // Get the value for this timestep from our forcing map
+                    let value = forcing_map
+                        .get(input_name)
+                        .and_then(|values| values.get(time_idx))
+                        .copied()
+                        .unwrap_or_else(|| {
+                            // If not found in forcing map, might be a static value
+                            match input_name.as_str() {
+                                "elev_mean" => elevation,
+                                "slope_mean" => slope,
+                                _ => {
+                                    eprintln!(
+                                        "Warning: Missing input {} for model, using 0.0",
+                                        input_name
+                                    );
+                                    0.0
+                                }
+                            }
+                        });
+                    forcing_values.push(value);
+                }
+
                 let output = self.run_single_model(model_instance, &forcing_values)?;
                 ensemble_outputs.push(output);
             }

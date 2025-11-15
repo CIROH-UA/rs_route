@@ -19,7 +19,7 @@ use cli::get_args;
 use config::{ChannelParams, ColumnConfig, OutputFormat};
 use io::netcdf::init_netcdf_output;
 use network::build_network_topology;
-use routing::process_routing_parallel_with_lstm; // Use the new function
+use routing::{process_routing_parallel, process_routing_parallel_with_lstm}; // Use the new function
 
 fn main() -> Result<()> {
     // Configuration
@@ -51,9 +51,9 @@ fn main() -> Result<()> {
     };
 
     // Get simulation parameters
-    let (max_external_steps, reference_time) = if use_lstm {
+    let (max_external_steps, reference_time) = if config.use_lstm {
         // When using LSTM, get timesteps from forcing file
-        get_simulation_params_lstm(&root_dir)?
+        get_simulation_params_lstm(config.config_dir.parent().unwrap())?
     } else {
         // Original CSV-based logic
         get_simulation_params(&csv_dir, &channel_params_map)?
@@ -74,7 +74,10 @@ fn main() -> Result<()> {
     );
     println!("  Network nodes: {}", topology.routing_order.len());
     println!("  Total timesteps: {}", total_timesteps);
-    println!("  Flow source: {}", if use_lstm { "LSTM" } else { "CSV" });
+    println!(
+        "  Flow source: {}",
+        if config.use_lstm { "LSTM" } else { "CSV" }
+    );
 
     // Initialize NetCDF output
     // skip the 0th timestep
@@ -84,7 +87,7 @@ fn main() -> Result<()> {
 
     let nc_filename = format!("troute_output_{}.nc", reference_time.format("%Y%m%d%H%M"));
     let netcdf_writer = init_netcdf_output(
-        config.output_dir,
+        config.output_dir.clone(),
         &nc_filename,
         topology.routing_order.len(),
         timesteps,
@@ -102,24 +105,36 @@ fn main() -> Result<()> {
     // Run parallel routing with LSTM support
     println!(
         "\nStarting parallel wave-front routing{}...",
-        if use_lstm {
+        if config.use_lstm {
             " with LSTM flow generation"
         } else {
             ""
         }
     );
 
-    process_routing_parallel(
-        config.kernel,
-        &topology,
-        &channel_params_map,
-        total_timesteps,
-        dt,
-        netcdf_writer,
-        Arc::new(pb),
-        Some(root_dir), // Pass root directory for LSTM
-        use_lstm,       // Use LSTM flag
-    )?;
+    if !config.use_lstm {
+        process_routing_parallel(
+            config.kernel,
+            &topology,
+            &channel_params_map,
+            total_timesteps,
+            dt,
+            netcdf_writer,
+            Arc::new(pb),
+        )?;
+    } else {
+        process_routing_parallel_with_lstm(
+            config.kernel,
+            &topology,
+            &channel_params_map,
+            total_timesteps,
+            dt,
+            netcdf_writer,
+            Arc::new(pb),
+            Some(config.config_dir.parent().unwrap()),
+            config.use_lstm,
+        )?;
+    }
 
     // Final flush for CSV
     if let Some(mut wtr) = csv_writer {
@@ -129,7 +144,7 @@ fn main() -> Result<()> {
 
     println!(
         "\nNetwork routing complete. Output saved to {}/{}",
-        output_dir.display(),
+        config.output_dir.display(),
         nc_filename
     );
     Ok(())
@@ -160,7 +175,7 @@ fn get_simulation_params(
 }
 
 // New function to get simulation params from forcing file when using LSTM
-fn get_simulation_params_lstm(root_dir: &std::path::PathBuf) -> Result<(usize, NaiveDateTime)> {
+fn get_simulation_params_lstm(root_dir: &std::path::Path) -> Result<(usize, NaiveDateTime)> {
     use netcdf::open;
 
     let forcing_path = root_dir.join("forcings").join("forcings.nc");
@@ -176,11 +191,11 @@ fn get_simulation_params_lstm(root_dir: &std::path::PathBuf) -> Result<(usize, N
         .context("Couldn't find variable 'Time'")?;
     // let max_external_steps = time_var.len();
 
-    // Get reference time (you may need to adjust this based on your forcing file structure)
-    // This assumes the forcing file has a reference_time attribute or similar
-    // For now, we'll use a default or try to read from attributes
-    let reference_time = NaiveDateTime::parse_from_str("2010-01-01 00:00:00", "%Y-%m-%d %H:%M:%S")
-        .context("Failed to parse reference time")?;
+    // get the first time step from the forcing file
+    let time = time_var.get_value::<i64, _>((0, 0))?;
+    // this time is seconds since unix epoch
+    let reference_time = NaiveDateTime::from_timestamp_opt(time, 0)
+        .context("Failed to convert time to NaiveDateTime")?;
 
     Ok((max_external_steps, reference_time))
 }

@@ -16,6 +16,9 @@ struct Args {
     internal_timestep_seconds: usize,
     #[arg(short, long, default_value_t = MuskingumCungeKernel::TRouteModernized)]
     kernel: MuskingumCungeKernel,
+    /// Use LSTM for flow generation instead of CSV files
+    #[arg(short = 'l', long, default_value_t = false)]
+    use_lstm: bool,
 }
 
 pub struct Config {
