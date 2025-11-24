@@ -132,8 +132,34 @@ fn process_node_all_timesteps(
     // Calculate upsampling factor if needed
     let upsampling = max_timesteps / (external_flows.len() - 1);
 
-    let mut external_flow = 0.0;
-    let mut upstream_flow = 0.0;
+    let mut external_flow = external_flows[0];
+    let mut upstream_flow = inflow[0];
+    let ten_days = upsampling * 24 * 10;
+    let kickstart = min(ten_days, max_timesteps);
+
+    for _timestep in 0..kickstart {
+        let result = kernel.exec(
+            qup,
+            upstream_flow,
+            qdp,
+            external_flow,
+            dt,
+            s0,
+            channel_params.dx,
+            channel_params.n,
+            channel_params.cs,
+            channel_params.bw,
+            channel_params.tw,
+            channel_params.twcc,
+            channel_params.ncc,
+            depth_p,
+            false,
+        );
+        let (qdc, velc, depthc) = (result.qdc, result.velc, result.depthc);
+        qup = upstream_flow;
+        qdp = qdc;
+        depth_p = depthc;
+    }
 
     for _timestep in 0..max_timesteps {
         if _timestep % upsampling == 0 {
@@ -165,23 +191,6 @@ fn process_node_all_timesteps(
             false,
         );
         let (qdc, velc, depthc) = (result.qdc, result.velc, result.depthc);
-        // let (qdc, velc, depthc, _, _, _) = mc_kernel::submuskingcunge(
-        //     qup,
-        //     upstream_flow,
-        //     qdp,
-        //     external_flow,
-        //     dt,
-        //     s0,
-        //     channel_params.dx,
-        //     channel_params.n,
-        //     channel_params.cs,
-        //     channel_params.bw,
-        //     channel_params.tw,
-        //     channel_params.twcc,
-        //     channel_params.ncc,
-        //     depth_p,
-        //     false,
-        // );
 
         results.flow_data.push(qdc);
         results.velocity_data.push(velc);
