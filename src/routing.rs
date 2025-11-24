@@ -130,11 +130,7 @@ fn process_node_all_timesteps(
     let mut depth_p = 0.0;
 
     // Calculate upsampling factor if needed
-    let upsampling = if use_lstm {
-        1 // LSTM already provides data at internal timestep resolution
-    } else {
-        max_timesteps / (external_flows.len() - 1) // Original CSV logic
-    };
+    let upsampling = max_timesteps / (external_flows.len() - 1);
 
     let mut external_flow = 0.0;
     let mut upstream_flow = 0.0;

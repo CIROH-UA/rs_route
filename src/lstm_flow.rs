@@ -289,6 +289,8 @@ struct ModelMetadata {
     output_size: usize,
     input_names: Vec<String>,
     output_names: Vec<String>,
+    #[serde(default)]
+    name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -304,6 +306,14 @@ struct ModelInstance<B: Backend> {
     metadata: ModelMetadata,
     scalars: TrainingScalars,
     lstm_state: Option<LstmState<B, 2>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct LstmStateData {
+    hidden: Vec<f32>,
+    cell: Vec<f32>,
+    hidden_shape: Vec<usize>,
+    cell_shape: Vec<usize>,
 }
 
 pub struct LstmFlowGenerator<B: Backend> {
@@ -348,6 +358,78 @@ impl<B: Backend> LstmFlowGenerator<B> {
         })
     }
 
+    fn get_warmstate_path(&self, node_id: u32, model_name: &str) -> PathBuf {
+        self.root_dir
+            .join("config")
+            .join("warmstates")
+            .join("lstm")
+            .join(format!("cat-{}", node_id))
+            .join(model_name)
+    }
+
+    fn save_model_state(&self, model_instance: &ModelInstance<B>, node_id: u32) -> Result<()> {
+        let state = match &model_instance.lstm_state {
+            Some(s) => s,
+            None => return Ok(()), // Nothing to save
+        };
+
+        let warmstate_dir = self.get_warmstate_path(node_id, &model_instance.metadata.name);
+        fs::create_dir_all(&warmstate_dir).with_context(|| {
+            format!("Failed to create warmstate directory: {:?}", warmstate_dir)
+        })?;
+
+        // Extract hidden and cell state tensors
+        let hidden_data = state.hidden.to_data();
+        let cell_data = state.cell.to_data();
+
+        let state_data = LstmStateData {
+            hidden: hidden_data
+                .to_vec()
+                .map_err(|e| anyhow::anyhow!("Failed to convert hidden state to vec: {:?}", e))?,
+            cell: cell_data
+                .to_vec()
+                .map_err(|e| anyhow::anyhow!("Failed to convert cell state to vec: {:?}", e))?,
+            hidden_shape: hidden_data.shape.clone(),
+            cell_shape: cell_data.shape.clone(),
+        };
+
+        let state_path = warmstate_dir.join("lstm_state.json");
+        let json = serde_json::to_string_pretty(&state_data)?;
+        fs::write(&state_path, json)
+            .with_context(|| format!("Failed to write state to {:?}", state_path))?;
+
+        Ok(())
+    }
+
+    fn load_model_state(
+        &self,
+        model_instance: &mut ModelInstance<B>,
+        node_id: u32,
+    ) -> Result<bool> {
+        let warmstate_dir = self.get_warmstate_path(node_id, &model_instance.metadata.name);
+        let state_path = warmstate_dir.join("lstm_state.json");
+
+        if !state_path.exists() {
+            return Ok(false); // No saved state
+        }
+
+        let json = fs::read_to_string(&state_path)
+            .with_context(|| format!("Failed to read state from {:?}", state_path))?;
+        let state_data: LstmStateData =
+            serde_json::from_str(&json).with_context(|| "Failed to parse LSTM state JSON")?;
+
+        // Reconstruct tensors from saved data
+        let hidden_tensor_data = vec_to_tensor(&state_data.hidden, state_data.hidden_shape);
+        let cell_tensor_data = vec_to_tensor(&state_data.cell, state_data.cell_shape);
+
+        let hidden: Tensor<B, 2> = Tensor::from_data(hidden_tensor_data, &self.device);
+        let cell: Tensor<B, 2> = Tensor::from_data(cell_tensor_data, &self.device);
+
+        model_instance.lstm_state = Some(LstmState { hidden, cell });
+
+        Ok(true)
+    }
+
     fn load_single_model(
         &self,
         training_config_path: &Path,
@@ -389,7 +471,9 @@ impl<B: Backend> LstmFlowGenerator<B> {
 
         // Load metadata
         let metadata_str = fs::read_to_string(converted_path.with_extension("json"))?;
-        let metadata: ModelMetadata = serde_json::from_str(&metadata_str)?;
+        let mut metadata: ModelMetadata = serde_json::from_str(&metadata_str)?;
+        let name = model_dir.split('/').rev().nth(0).unwrap_or("unknown");
+        metadata.name = name.to_string();
 
         // Load scalars
         let scalars_str = fs::read_to_string(burn_dir.join("train_data_scaler.json"))?;
@@ -410,7 +494,6 @@ impl<B: Backend> LstmFlowGenerator<B> {
             &self.device,
             burn_dir.join("weights.json").to_str().unwrap(),
         );
-
         Ok(ModelInstance {
             model,
             metadata,
@@ -502,6 +585,23 @@ impl<B: Backend> LstmFlowGenerator<B> {
                     .ok_or(anyhow::anyhow!("train_cfg_file entry not a string"))?,
             );
             models.push(self.load_single_model(training_config_path, &config)?);
+        }
+
+        for model_instance in &mut models {
+            match self.load_model_state(model_instance, node_id) {
+                Ok(true) => println!(
+                    "Loaded warm state for model: {}",
+                    model_instance.metadata.name
+                ),
+                Ok(false) => println!(
+                    "No warm state found for model: {}, starting fresh",
+                    model_instance.metadata.name
+                ),
+                Err(e) => eprintln!(
+                    "Warning: Failed to load warm state for {}: {}",
+                    model_instance.metadata.name, e
+                ),
+            }
         }
 
         // Get static inputs from config
@@ -632,17 +732,18 @@ impl<B: Backend> LstmFlowGenerator<B> {
                 0.0
             };
 
+            for model_instance in &mut models {
+                if let Err(e) = self.save_model_state(model_instance, node_id) {
+                    eprintln!(
+                        "Warning: Failed to save state for model {}: {}",
+                        model_instance.metadata.name, e
+                    );
+                }
+            }
+
             // Convert to m3/s
             let surface_runoff_volume_m3_s = mean_surface_runoff_mm * output_scale_factor_cms;
             all_flows.push_back(surface_runoff_volume_m3_s);
-        }
-
-        // Pad if needed
-        if all_flows.len() < max_timesteps {
-            let last_flow = all_flows.back().copied().unwrap_or(0.0);
-            while all_flows.len() < max_timesteps {
-                all_flows.push_back(last_flow);
-            }
         }
 
         Ok(all_flows)
