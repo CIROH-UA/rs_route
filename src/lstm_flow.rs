@@ -348,11 +348,7 @@ impl<B: Backend> LstmFlowGenerator<B> {
         })
     }
 
-    fn load_single_model(
-        &self,
-        training_config_path: &Path,
-        config: &serde_yaml::Value,
-    ) -> Result<ModelInstance<B>> {
+    fn load_single_model(&self, training_config_path: &Path) -> Result<ModelInstance<B>> {
         let training_config = fs::read_to_string(training_config_path)?;
         let training_config: serde_yaml::Value = serde_yaml::from_str(&training_config)?;
 
@@ -377,14 +373,86 @@ impl<B: Backend> LstmFlowGenerator<B> {
             .next()
             .ok_or(anyhow::anyhow!("No model file found"))??;
 
-        // Check for converted weights
+        // Convert weights if needed
         let model_folder = model_path.parent().unwrap();
         let burn_dir = model_folder.join("burn");
         let converted_path = burn_dir.join(model_path.file_name().unwrap());
+        let lock_file_path = burn_dir.join(".conversion.lock");
 
-        // Ensure conversion if needed
-        if !converted_path.exists() || !burn_dir.join("weights.json").exists() {
-            //self.convert_model_weights(&model_path, training_config_path)?;
+        // Create burn directory if it doesn't exist
+        if !burn_dir.exists() {
+            fs::create_dir_all(&burn_dir)?;
+        }
+
+        // Check if conversion is needed
+        let needs_conversion = !converted_path.exists()
+            || !converted_path.with_extension("json").exists()
+            || !burn_dir.join("train_data_scaler.json").exists()
+            || !burn_dir.join("weights.json").exists();
+
+        if needs_conversion {
+            // Try to acquire lock
+            let mut lock_acquired = false;
+            let process_id = std::process::id();
+
+            loop {
+                // Try to create lock file atomically
+                match fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&lock_file_path)
+                {
+                    Ok(mut file) => {
+                        // Write process ID to lock file for debugging
+                        use std::io::Write;
+                        writeln!(file, "Locked by process {}", process_id)?;
+                        lock_acquired = true;
+                        break;
+                    }
+                    Err(_) => {
+                        // Lock file exists, another process is converting
+
+                        std::thread::sleep(std::time::Duration::from_millis(1000));
+
+                        // Check if conversion is complete
+                        if converted_path.exists()
+                            && converted_path.with_extension("json").exists()
+                            && burn_dir.join("train_data_scaler.json").exists()
+                            && burn_dir.join("weights.json").exists()
+                        {
+                            // println!("Process {} found completed conversion", process_id);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // If we acquired the lock, do the conversion
+            if lock_acquired {
+                println!(
+                    "Process {} converting PyTorch weights to Burn format for model: {}",
+                    process_id,
+                    model_path.display()
+                );
+
+                // Perform conversion
+                match self.convert_model_weights(&model_path, &training_config_path) {
+                    Ok(_) => {
+                        println!("Process {} completed model conversion", process_id);
+                    }
+                    Err(e) => {
+                        // Clean up lock file on error
+                        fs::remove_file(&lock_file_path)?;
+                        return Err(e);
+                    }
+                }
+
+                // Remove lock file after successful conversion
+                fs::remove_file(&lock_file_path)?;
+                println!("Process {} released conversion lock", process_id);
+            }
+        } else {
+            // println!("Model already converted, skipping conversion");
         }
 
         // Load metadata
@@ -501,7 +569,7 @@ impl<B: Backend> LstmFlowGenerator<B> {
                     .as_str()
                     .ok_or(anyhow::anyhow!("train_cfg_file entry not a string"))?,
             );
-            models.push(self.load_single_model(training_config_path, &config)?);
+            models.push(self.load_single_model(training_config_path)?);
         }
 
         // Create a map of all available forcing values
