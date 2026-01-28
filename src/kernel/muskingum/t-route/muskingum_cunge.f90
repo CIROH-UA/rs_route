@@ -284,7 +284,8 @@ subroutine secant2_h(z, bw, bfd, twcc, s0, n, ncc, dt, dx, &
         endif
         if (interval .eq. lower_interval) then
         !H
-            X = min(0.5_real32,max(0.25_real32,0.5_real32*(1.0_real32-(((C1*qup)+(C2*quc)+(C3*qdp) + C4)/(2.0_real32*twcc*s0*Ck*dx)))))
+            X = min(0.5_real32,max(0.25_real32,0.5_real32*(1.0_real32-(((C1*qup)+(C2*quc)+(C3*qdp) + C4) &
+                /(2.0_real32*twcc*s0*Ck*dx)))))
         endif
     else
         if(Ck .gt. 0.0_real32) then
@@ -294,7 +295,8 @@ subroutine secant2_h(z, bw, bfd, twcc, s0, n, ncc, dt, dx, &
             endif
             !H
             if (interval .eq. lower_interval) then
-                X = min(0.5_real32,max(0.25_real32,0.5_real32*(1.0_real32-(((C1*qup)+(C2*quc)+(C3*qdp) + C4)/(2.0_real32*twl*s0*Ck*dx)))))
+                X = min(0.5_real32,max(0.25_real32,0.5_real32*(1.0_real32-(((C1*qup)+(C2*quc)+(C3*qdp) + C4) &
+                    /(2.0_real32*twl*s0*Ck*dx)))))
             endif
         else
             X = 0.5_real32
@@ -395,7 +397,7 @@ subroutine hydraulic_geometry(h, bfd, bw, twcc, z, &
 
     h_gt_bf_loc = max(h - bfd, 0.0_real32)
     h_lt_bf_loc = min(bfd, h)
-    
+
     ! Exception for NWM 3.0 channel geometry:
     ! if depth is beyond bankfull, but the floodplain width is zero,
     ! then just extend the trapezoidal channel upwards beyond bankfull
