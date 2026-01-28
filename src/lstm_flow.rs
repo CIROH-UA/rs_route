@@ -504,16 +504,6 @@ impl<B: Backend> LstmFlowGenerator<B> {
             models.push(self.load_single_model(training_config_path, &config)?);
         }
 
-        // Get static inputs from config
-        let elevation = config
-            .get("elev_mean")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0) as f32;
-        let slope = config
-            .get("slope_mean")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0) as f32;
-
         // Create a map of all available forcing values
         let mut forcing_map: HashMap<String, Vec<f32>> = HashMap::new();
 
@@ -579,9 +569,34 @@ impl<B: Backend> LstmFlowGenerator<B> {
                 .get_values((current_index, time_range))?,
         );
 
-        // Add static values that are constant for all timesteps
-        forcing_map.insert("elev_mean".to_string(), vec![elevation; forcing_timesteps]);
-        forcing_map.insert("slope_mean".to_string(), vec![slope; forcing_timesteps]);
+        // Build a map of static attributes from config (any key that parses as f64)
+        let mut static_attributes: HashMap<String, f32> = HashMap::new();
+        if let Some(config_map) = config.as_mapping() {
+            for (key, value) in config_map {
+                if let Some(key_str) = key.as_str() {
+                    if let Some(val) = value.as_f64() {
+                        static_attributes.insert(key_str.to_string(), val as f32);
+                    }
+                }
+            }
+        }
+
+        // Add static attributes to forcing_map (expanded to all timesteps)
+        for (attr_name, attr_value) in &static_attributes {
+            forcing_map.insert(attr_name.clone(), vec![*attr_value; forcing_timesteps]);
+        }
+
+        // Check for missing inputs before the main loop and warn once per missing input
+        for model_instance in &models {
+            for input_name in &model_instance.metadata.input_names {
+                if !forcing_map.contains_key(input_name) {
+                    eprintln!(
+                        "Warning: Missing input '{}' for model, will use 0.0",
+                        input_name
+                    );
+                }
+            }
+        }
 
         // Calculate output scale factor
         let output_scale_factor_cms =
@@ -604,20 +619,7 @@ impl<B: Backend> LstmFlowGenerator<B> {
                         .get(input_name)
                         .and_then(|values| values.get(time_idx))
                         .copied()
-                        .unwrap_or_else(|| {
-                            // If not found in forcing map, might be a static value
-                            match input_name.as_str() {
-                                "elev_mean" => elevation,
-                                "slope_mean" => slope,
-                                _ => {
-                                    eprintln!(
-                                        "Warning: Missing input {} for model, using 0.0",
-                                        input_name
-                                    );
-                                    0.0
-                                }
-                            }
-                        });
+                        .unwrap_or(0.0);
                     forcing_values.push(value);
                 }
 
