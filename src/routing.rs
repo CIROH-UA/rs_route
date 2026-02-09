@@ -1,8 +1,7 @@
 use crate::config::ChannelParams;
 use crate::io::csv::load_external_flows;
-use crate::io::netcdf::{write_batch, write_output};
+use crate::io::netcdf::write_batch;
 use crate::io::results::SimulationResults;
-use crate::kernel;
 use crate::kernel::muskingum::MuskingumCungeKernel;
 use crate::network::NetworkTopology;
 use crate::state::NodeStatus;
