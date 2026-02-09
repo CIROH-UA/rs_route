@@ -1,5 +1,5 @@
 # Experimental MC routing in rust
-immitating t-route to help teach myself rust
+Imitating t-route to help teach myself rust
 the code in here isn't very correct or good
 
 # Network Routing
@@ -29,7 +29,7 @@ src/
 
 ### on ubuntu
 ```bash
-sudo apt install -y libhdf5-dev libnetcdf-dev libsqlit3-dev
+sudo apt install -y libhdf5-dev libnetcdf-dev libsqlite3-dev
 ```
 ## Building and Running
 
@@ -38,7 +38,7 @@ sudo apt install -y libhdf5-dev libnetcdf-dev libsqlit3-dev
 cargo build --release
 
 # Run the simulation
-cargo run --release
+cargo run --release --bin route_rs [target_directory]
 ```
 
 ## Performance Optimizations
