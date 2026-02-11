@@ -179,7 +179,7 @@ pub fn write_batch(
 }
 
 // Function to write results to NetCDF
-pub fn write_output(
+pub fn _write_output(
     output_file: &Arc<Mutex<FileMut>>,
     results: &Arc<SimulationResults>,
 ) -> Result<()> {

@@ -30,6 +30,7 @@ fn main() -> Result<()> {
     let dt: f32 = config.internal_timestep_seconds as f32;
     let db_path: std::path::PathBuf = config.gpkg_file;
     let csv_dir: std::path::PathBuf = config.csv_dir;
+    let _config_dir: std::path::PathBuf = config.config_dir;
     // let output_format: OutputFormat = OutputFormat::NetCdf;
     let output_format: OutputFormat = match OUTPUT_TYPE {
         "CSV" => OutputFormat::Csv,
