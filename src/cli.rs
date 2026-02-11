@@ -70,3 +70,38 @@ pub fn get_args() -> Result<Config> {
         kernel: args.kernel,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    // Same-file tests for CLI module
+    use super::*;
+
+    // Test Args parsing with default values
+    #[test]
+    fn test_args_parsing_defaults() {
+        let args = Args::parse_from(["test", "test_route_dir"]);
+        assert_eq!(args.route_dir, PathBuf::from("test_route_dir"));
+        assert_eq!(args.internal_timestep_seconds, 300);
+        match args.kernel {
+            MuskingumCungeKernel::TRouteModernized => {},
+            _ => panic!("Expected default kernel to be TRouteModernized"),
+        }
+    }
+    // Test Args parsing with custom values
+    #[test]
+    fn test_args_parsing_custom() {
+        let args = Args::parse_from(["test", "test_route_dir", "-i", "600", "-k", "t-route-legacy"]);
+        assert_eq!(args.route_dir, PathBuf::from("test_route_dir"));
+        assert_eq!(args.internal_timestep_seconds, 600);
+        match args.kernel {
+            MuskingumCungeKernel::TRouteLegacy => {},
+            _ => panic!("Expected kernel to be TRouteLegacy"),
+        }
+    }
+    // Impossible to test get_args(), as it pulls from the program's actual command line arguments, which we can't easily manipulate.
+    // #[test]
+    // fn test_get_args_invalid_root() {
+    //     let result = get_args();
+    //     assert!(result.is_err());
+    // }
+}
