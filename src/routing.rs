@@ -358,7 +358,8 @@ fn worker_thread(
                                 error_message.push_str(&format!("\nContext: {}", context));
                             }
                             eprintln!("{}", error_message);
-                            // break;
+                            writer_tx.send(WriterMessage::Shutdown).ok();
+                            scheduler_tx.send(SchedulerMessage::Shutdown).ok();
                         }
                     }
 
