@@ -37,8 +37,11 @@ pub fn get_args() -> Result<Config> {
 
     // Check directories valid
     if !root_dir.exists() || !root_dir.is_dir() {
-        return Err(anyhow::anyhow!("Given root directory does not exist or is not a directory: {:?}", root_dir))
-            .with_context(|| format!("Failed to access root directory: {:?}", root_dir));
+        return Err(anyhow::anyhow!(
+            "Given root directory does not exist or is not a directory: {:?}",
+            root_dir
+        ))
+        .with_context(|| format!("Failed to access root directory: {:?}", root_dir));
     }
 
     let mut missing_dirs = Vec::new();
@@ -48,10 +51,13 @@ pub fn get_args() -> Result<Config> {
         }
     }
     if !missing_dirs.is_empty() {
-        return Err(anyhow::anyhow!("Missing required directories: {:?}", missing_dirs))
-            .with_context(|| format!("Failed to access required directories: {:?}", missing_dirs));
+        return Err(anyhow::anyhow!(
+            "Missing required directories: {:?}",
+            missing_dirs
+        ))
+        .with_context(|| format!("Failed to access required directories: {:?}", missing_dirs));
     }
-    
+
     // Find the .gpkg file in the config directory
     let gpkg_file = config_dir
         .read_dir()
@@ -83,18 +89,25 @@ mod tests {
         assert_eq!(args.route_dir, PathBuf::from("test_route_dir"));
         assert_eq!(args.internal_timestep_seconds, 300);
         match args.kernel {
-            MuskingumCungeKernel::TRouteModernized => {},
+            MuskingumCungeKernel::TRouteModernized => {}
             _ => panic!("Expected default kernel to be TRouteModernized"),
         }
     }
     // Test Args parsing with custom values
     #[test]
     fn test_args_parsing_custom() {
-        let args = Args::parse_from(["test", "test_route_dir", "-i", "600", "-k", "t-route-legacy"]);
+        let args = Args::parse_from([
+            "test",
+            "test_route_dir",
+            "-i",
+            "600",
+            "-k",
+            "t-route-legacy",
+        ]);
         assert_eq!(args.route_dir, PathBuf::from("test_route_dir"));
         assert_eq!(args.internal_timestep_seconds, 600);
         match args.kernel {
-            MuskingumCungeKernel::TRouteLegacy => {},
+            MuskingumCungeKernel::TRouteLegacy => {}
             _ => panic!("Expected kernel to be TRouteLegacy"),
         }
     }

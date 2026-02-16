@@ -145,14 +145,23 @@ fn get_simulation_params(
         return Err(anyhow::anyhow!("CSV file is empty: {:?}", file_name))
             .with_context(|| format!("Failed to read CSV file: {:?}", file_name));
     } else if content.lines().count() == 1 {
-        return Err(anyhow::anyhow!("CSV file only contains header: {:?}", file_name))
-            .with_context(|| format!("Failed to read CSV file: {:?}", file_name));
+        return Err(anyhow::anyhow!(
+            "CSV file only contains header: {:?}",
+            file_name
+        ))
+        .with_context(|| format!("Failed to read CSV file: {:?}", file_name));
     }
 
     let max_external_steps = content.lines().count().saturating_sub(2);
 
-    let line = content.lines().nth(1).with_context(|| format!("Failed to read second line of CSV file: {:?}", file_name))?;
-    let time = line.split(',').nth(1).with_context(|| format!("Failed to parse time from CSV line: {:?}", line))?;
+    let line = content
+        .lines()
+        .nth(1)
+        .with_context(|| format!("Failed to read second line of CSV file: {:?}", file_name))?;
+    let time = line
+        .split(',')
+        .nth(1)
+        .with_context(|| format!("Failed to parse time from CSV line: {:?}", line))?;
 
     let reference_time = NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S")
         .context("Failed to parse reference time")?;

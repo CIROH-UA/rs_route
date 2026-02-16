@@ -320,5 +320,12 @@ pub fn submuskingcunge(
     } else {
         (0.0, 0.0)
     };
-    MuskingumCungeResult { qdc, velc, depthc, ck, cn, x }
+    MuskingumCungeResult {
+        qdc,
+        velc,
+        depthc,
+        ck,
+        cn,
+        x,
+    }
 }

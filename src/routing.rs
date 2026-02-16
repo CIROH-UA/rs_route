@@ -352,7 +352,8 @@ fn worker_thread(
                             }
                         }
                         Err(e) => {
-                            let mut error_message = format!("Error processing node {}: {}", node_id, e);
+                            let mut error_message =
+                                format!("Error processing node {}: {}", node_id, e);
                             // if error context, elaborate on it
                             if let Some(context) = e.chain().skip(1).next() {
                                 error_message.push_str(&format!("\nContext: {}", context));
