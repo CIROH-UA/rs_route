@@ -11,17 +11,35 @@ A Rust implementation of network flow routing using the Muskingum-Cunge method.
 ```
 src/
 ├── main.rs         # Main entry point
+├── cli.rs          # Command-line interface
 ├── config.rs       # Configuration structures
 ├── network.rs      # Network topology and database operations
 ├── state.rs        # Network state management
 ├── routing.rs      # Core routing logic
-├── mc_kernel.rs    # Muskingum-Cunge kernel (existing)
-└── io/             # I/O operations
-    ├── mod.rs      # Module declarations
-    ├── csv.rs      # CSV reading/writing
-    ├── netcdf.rs   # NetCDF output
-    └── results.rs  # Simulation results storage
+├── io/             # I/O operations
+│   ├── mod.rs      # Module declarations
+│   ├── csv.rs      # CSV reading/writing
+│   ├── netcdf.rs   # NetCDF output
+│   └── results.rs  # Simulation results storage
+└── kernel/
+    └── muskingum/
+        ├── mod.rs          # Muskingum module
+        ├── c_mc.rs         # Rust interface to C Muskingum-Cunge implementation
+        ├── t_route.rs      # Rust interface to Fortran T-Route implementation
+        ├── c_mc/
+        │   ├── muskingumcunge.c
+        │   └── muskingumcunge.h
+        ├── route_rs/
+        │   └── mc_kernel.rs    # Rust implementation of Muskingum-Cunge
+        └── t-route/
+            ├── bind.f90
+            ├── muskingum_cunge.f90
+            └── t-route-legacy/
+                ├── MCsingleSegStime_f2py_NOLOOP.f90
+                └── varPrecision.f90
 ```
+<!-- Above is accurate to src/ as of Feb 2026 -->
+
 ## Dependencies
 * hdf5
 * netcdf
