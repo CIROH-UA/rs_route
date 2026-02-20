@@ -11,6 +11,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+pub static USE_HARD_CODED_WEIGHTS: bool = true;
+
 #[derive(Clone)]
 pub struct NgenLstmConfig {
     pub root_dir: PathBuf,
@@ -19,9 +21,61 @@ pub struct NgenLstmConfig {
     pub total_timesteps: usize,
 }
 
+pub fn find_forcing_file(root_dir: &Path) -> Result<PathBuf> {
+    // forcing dir should contain single .nc file
+    // name is *usually* forcings.nc, but is different for datastream
+    let forcing_dir = root_dir.join("forcings");
+    let mut nc_files = glob(&format!("{}/*.nc", forcing_dir.display()))?
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
+    if nc_files.len() != 1 {
+        return Err(anyhow::anyhow!(
+            "Expected exactly one .nc file in forcing directory {}, found {}",
+            forcing_dir.display(),
+            nc_files.len()
+        ));
+    }
+    Ok(nc_files.remove(0))
+}
+
+pub fn find_lstm_config_directory(root_dir: &Path) -> Result<PathBuf> {
+    let cat_config_dir = root_dir.join("config").join("cat_config");
+    // lstm subdir can be capitalized differently depending on the source of the config, so we look for any subdir that contains
+    // a variation of "lstm" in the name, i.e. lstm, LSTM
+    let mut lstm_dirs = glob(&format!("{}/*/", cat_config_dir.display()))?
+        .filter_map(Result::ok)
+        .filter(|p| {
+            p.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name_str| name_str.to_lowercase().contains("lstm"))
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    if lstm_dirs.is_empty() {
+        let other_dirs = glob(&format!("{}/*/", cat_config_dir.display()))?
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>();
+        return Err(anyhow::anyhow!(
+            "No LSTM config directory found in {}. Expected a subdirectory with 'lstm' in the name. Found these other subdirectories: {:?}",
+            cat_config_dir.display(),
+            other_dirs.iter().map(|p| p.display()).collect::<Vec<_>>()
+        ));
+    } else if lstm_dirs.len() != 1 {
+        return Err(anyhow::anyhow!(
+            "Expected exactly one LSTM config directory in {}, found {}: {:?}",
+            cat_config_dir.display(),
+            lstm_dirs.len(),
+            lstm_dirs.iter().map(|p| p.display()).collect::<Vec<_>>()
+        ));
+    }
+    Ok(lstm_dirs.remove(0))
+}
+
 impl NgenLstmConfig {
     pub fn new(root_dir: PathBuf) -> Result<Self> {
-        let forcing_path = root_dir.join("forcings").join("forcings.nc");
+        // let forcing_path = root_dir.join("forcings").join("forcings.nc");
+        let forcing_path = find_forcing_file(&root_dir)
+            .with_context(|| format!("Failed to find forcing file in directory: {:?}", root_dir))?;
 
         // Open forcing file temporarily to get metadata
         let forcing_file = open(&forcing_path)
@@ -66,6 +120,8 @@ mod lstm_model {
     };
     use serde_json::Value;
     use std::fs;
+
+    use crate::{lstm_flow::USE_HARD_CODED_WEIGHTS, rustify_test::example_weights::WeightConfig};
 
     #[derive(Module, Debug)]
     pub struct NextgenLstm<B: Backend> {
@@ -174,7 +230,97 @@ mod lstm_model {
             Self { lstm, head }
         }
 
+        fn try_get_builtin_weights(&self, weight_name: &str) -> Option<WeightConfig> {
+            match weight_name {
+                "nh_AORC_hourly_25yr_1210_112435_7" => Some(WeightConfig::nh_AORC_hourly_25yr_1210_112435_7()),
+                "nh_AORC_hourly_25yr_1210_112435_8" => Some(WeightConfig::nh_AORC_hourly_25yr_1210_112435_8()),
+                "nh_AORC_hourly_25yr_1210_112435_9" => Some(WeightConfig::nh_AORC_hourly_25yr_1210_112435_9()),
+                "nh_AORC_hourly_25yr_seq999_seed101_0701_143442" => Some(WeightConfig::nh_AORC_hourly_25yr_seq999_seed101_0701_143442()),
+                "nh_AORC_hourly_25yr_seq999_seed103_2701_171540" => Some(WeightConfig::nh_AORC_hourly_25yr_seq999_seed103_2701_171540()),
+                "nh_AORC_hourly_slope_elev_precip_temp_seq999_seed101_2801_191806" => Some(WeightConfig::nh_AORC_hourly_slope_elev_precip_temp_seq999_seed101_2801_191806()),
+                _ => None,
+            }
+        }
+
+        fn load_weight_config(&mut self, device: &B::Device, weight_config: WeightConfig) {
+            let input_size = weight_config.input_size;
+            let hidden_size = weight_config.hidden_size;
+
+            self.lstm.input_gate = create_gate_controller(
+                &weight_config.input_gate_input_weights,
+                &weight_config.input_gate_input_biases,
+                &weight_config.input_gate_hidden_weights,
+                &weight_config.input_gate_hidden_biases,
+                device,
+                input_size,
+                hidden_size,
+            );
+
+            self.lstm.forget_gate = create_gate_controller(
+                &weight_config.forget_gate_input_weights,
+                &weight_config.forget_gate_input_biases,
+                &weight_config.forget_gate_hidden_weights,
+                &weight_config.forget_gate_hidden_biases,
+                device,
+                input_size,
+                hidden_size,
+            );
+
+            self.lstm.cell_gate = create_gate_controller(
+                &weight_config.cell_gate_input_weights,
+                &weight_config.cell_gate_input_biases,
+                &weight_config.cell_gate_hidden_weights,
+                &weight_config.cell_gate_hidden_biases,
+                device,
+                input_size,
+                hidden_size,
+            );
+
+            self.lstm.output_gate = create_gate_controller(
+                &weight_config.output_gate_input_weights,
+                &weight_config.output_gate_input_biases,
+                &weight_config.output_gate_hidden_weights,
+                &weight_config.output_gate_hidden_biases,
+                device,
+                input_size,
+                hidden_size,
+            );
+        }
+
         pub fn load_json_weights(&mut self, device: &B::Device, weight_path: &str) {
+            // rustify_test section 0 start. 
+            // experimental functionality for optimizing weight loading.
+            let weight_dirname: &str = weight_path
+                .split('/')
+                .rev()
+                .nth(2)
+                .unwrap_or_else(|| panic!("Failed to parse weight path: {}", weight_path));
+            // Using builtin_weights: 10.0 seconds
+            let builtin_weights: Option<WeightConfig> = self.try_get_builtin_weights(weight_dirname);
+            if let Some(weight_config) = builtin_weights && USE_HARD_CODED_WEIGHTS {
+                // println!("Using built-in weights for {}", weight_dirname);
+                self.load_weight_config(device, weight_config);
+                return;
+            }
+            // let target_path: String = format!("./rustify_test/{}.rs", weight_dirname);
+            // let need_conversion = !Path::new(&target_path).exists();
+            // let need_conversion: bool = !fs::exists(target_path.clone()).unwrap();
+            // let mut conversion_string: String = "use crate::rustify_test::example_weights::WeightConfig;\n\n".to_string();
+            // let first_indent = "    ";
+            // let second_indent = "        ";
+            // if need_conversion {
+            //     println!("Doing conversion for {}", weight_dirname);
+            //     fs::create_dir_all("./rustify_test").unwrap();
+            //     // fs::write(
+            //     //     &target_path,
+            //     //     "".to_string()
+            //     //     )
+            //     // .expect("Failed to write Rust file");
+            //     // implement the static weights as an impl for WeightConfig that returns a constructed WeightConfig struct with all the weights hardcoded in. This way we can load weights without parsing JSON in the future.
+            //     // conversion_string.push_str(&format!("impl WeightConfig {{\n    pub fn {}() -> Self {{\n        Self {{\n", weight_dirname));
+            //     conversion_string.push_str(&format!("impl WeightConfig {{\n{}pub fn {}() -> Self {{\n{}Self {{\n", first_indent, weight_dirname, second_indent));
+            // }
+            // rustify_test section 0 end.
             let json_str = fs::read_to_string(weight_path).expect("Failed to read file");
             let weights: Value = serde_json::from_str(&json_str).unwrap();
 
@@ -191,6 +337,12 @@ mod lstm_model {
             let output_size = weights["output_size"].as_u64().unwrap() as usize;
             let hidden_size = weights["hidden_size"].as_u64().unwrap() as usize;
 
+            // if need_conversion {
+            //     conversion_string.push_str(&format!("{}input_size: {},\n", second_indent, input_size));
+            //     conversion_string.push_str(&format!("{}hidden_size: {},\n", second_indent, hidden_size));
+            //     conversion_string.push_str(&format!("{}output_size: {},\n", second_indent, output_size));
+            // }
+
             // Load all gate weights
             let input_gate_input_weights =
                 to_vec(&weights["lstm.input_gate.input_transform.weight"]);
@@ -199,6 +351,14 @@ mod lstm_model {
                 to_vec(&weights["lstm.input_gate.hidden_transform.weight"]);
             let input_gate_hidden_biases =
                 to_vec(&weights["lstm.input_gate.hidden_transform.bias"]);
+
+            // if need_conversion {
+            //     // There are megabytes of weights, so we *do not* want individual values per line.
+            //     conversion_string.push_str(&format!("{}input_gate_input_weights: vec!{:?},\n", second_indent, input_gate_input_weights));
+            //     conversion_string.push_str(&format!("{}input_gate_input_biases: vec!{:?},\n", second_indent, input_gate_input_biases));
+            //     conversion_string.push_str(&format!("{}input_gate_hidden_weights: vec!{:?},\n", second_indent, input_gate_hidden_weights));
+            //     conversion_string.push_str(&format!("{}input_gate_hidden_biases: vec!{:?},\n", second_indent, input_gate_hidden_biases));
+            // }
 
             self.lstm.input_gate = create_gate_controller(
                 &input_gate_input_weights,
@@ -219,6 +379,13 @@ mod lstm_model {
             let forget_gate_hidden_biases =
                 to_vec(&weights["lstm.forget_gate.hidden_transform.bias"]);
 
+            // if need_conversion {
+            //     conversion_string.push_str(&format!("{}forget_gate_input_weights: vec!{:?},\n", second_indent, forget_gate_input_weights));
+            //     conversion_string.push_str(&format!("{}forget_gate_input_biases: vec!{:?},\n", second_indent, forget_gate_input_biases));
+            //     conversion_string.push_str(&format!("{}forget_gate_hidden_weights: vec!{:?},\n", second_indent, forget_gate_hidden_weights));
+            //     conversion_string.push_str(&format!("{}forget_gate_hidden_biases: vec!{:?},\n", second_indent, forget_gate_hidden_biases));
+            // }
+
             self.lstm.forget_gate = create_gate_controller(
                 &forget_gate_input_weights,
                 &forget_gate_input_biases,
@@ -234,6 +401,13 @@ mod lstm_model {
             let cell_gate_hidden_weights =
                 to_vec(&weights["lstm.cell_gate.hidden_transform.weight"]);
             let cell_gate_hidden_biases = to_vec(&weights["lstm.cell_gate.hidden_transform.bias"]);
+
+            // if need_conversion {
+            //     conversion_string.push_str(&format!("{}cell_gate_input_weights: vec!{:?},\n", second_indent, cell_gate_input_weights));
+            //     conversion_string.push_str(&format!("{}cell_gate_input_biases: vec!{:?},\n", second_indent, cell_gate_input_biases));
+            //     conversion_string.push_str(&format!("{}cell_gate_hidden_weights: vec!{:?},\n", second_indent, cell_gate_hidden_weights));
+            //     conversion_string.push_str(&format!("{}cell_gate_hidden_biases: vec!{:?},\n", second_indent, cell_gate_hidden_biases));
+            // }
 
             self.lstm.cell_gate = create_gate_controller(
                 &cell_gate_input_weights,
@@ -254,6 +428,13 @@ mod lstm_model {
             let output_gate_hidden_biases =
                 to_vec(&weights["lstm.output_gate.hidden_transform.bias"]);
 
+            // if need_conversion {
+            //     conversion_string.push_str(&format!("{}output_gate_input_weights: vec!{:?},\n", second_indent, output_gate_input_weights));
+            //     conversion_string.push_str(&format!("{}output_gate_input_biases: vec!{:?},\n", second_indent, output_gate_input_biases));
+            //     conversion_string.push_str(&format!("{}output_gate_hidden_weights: vec!{:?},\n", second_indent, output_gate_hidden_weights));
+            //     conversion_string.push_str(&format!("{}output_gate_hidden_biases: vec!{:?},\n", second_indent, output_gate_hidden_biases));
+            // }
+
             self.lstm.output_gate = create_gate_controller(
                 &output_gate_input_weights,
                 &output_gate_input_biases,
@@ -263,6 +444,15 @@ mod lstm_model {
                 input_size,
                 hidden_size,
             );
+
+            // if need_conversion {
+            //     conversion_string.push_str(&format!("    }}\n}}\n"));
+            //     fs::write(
+            //         &target_path,
+            //         conversion_string,
+            //      )
+            //     .expect("Failed to write Rust file");
+            // }
         }
 
         pub fn forward(
@@ -317,7 +507,9 @@ pub struct LstmFlowGenerator<B: Backend> {
 impl<B: Backend> LstmFlowGenerator<B> {
     pub fn new(root_dir: PathBuf) -> Result<Self> {
         // Open forcing file
-        let forcing_path = root_dir.join("forcings").join("forcings.nc");
+        // let forcing_path = root_dir.join("forcings").join("forcings.nc");
+        let forcing_path = find_forcing_file(&root_dir)
+            .with_context(|| format!("Failed to find forcing file in directory: {:?}", root_dir))?;
         let forcing_file = open(&forcing_path)
             .with_context(|| format!("Failed to open forcing file: {:?}", forcing_path))?;
 
@@ -531,12 +723,15 @@ impl<B: Backend> LstmFlowGenerator<B> {
         max_timesteps: usize,
     ) -> Result<VecDeque<f32>> {
         // Construct config path
-        let config_path = self
-            .root_dir
-            .join("config")
-            .join("cat_config")
-            .join("lstm")
-            .join(format!("cat-{}.yml", node_id));
+        // let config_path = self
+        //     .root_dir
+        //     .join("config")
+        //     .join("cat_config")
+        //     .join("lstm")
+        //     .join(format!("cat-{}.yml", node_id));
+        let lstm_config_dir = find_lstm_config_directory(&self.root_dir)?;
+            // .with_context(|| format!("Failed to find LSTM config directory in {:?}", self.root_dir))?;
+        let config_path = lstm_config_dir.join(format!("cat-{}.yml", node_id));
 
         if !config_path.exists() {
             return Err(anyhow::anyhow!(

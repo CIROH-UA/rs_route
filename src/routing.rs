@@ -67,7 +67,7 @@ fn process_node_all_timesteps(
                 Err(e) => {
                     // Fall back to CSV if LSTM fails
                     eprintln!(
-                        "LSTM generation failed for node {}: {}. Falling back to CSV.",
+                        "LSTM generation failed for node {}: ({}). Falling back to CSV.",
                         node_id, e
                     );
                     load_external_flows(

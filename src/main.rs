@@ -14,12 +14,14 @@ mod state;
 pub mod kernel {
     pub mod muskingum;
 }
+mod rustify_test;
 
 use cli::get_args;
 use config::{ChannelParams, ColumnConfig, OutputFormat};
 use io::netcdf::init_netcdf_output;
 use network::build_network_topology;
 use routing::{process_routing_parallel, process_routing_parallel_with_lstm}; // Use the new function
+use lstm_flow::find_forcing_file;
 
 fn main() -> Result<()> {
     // Configuration
@@ -178,7 +180,9 @@ fn get_simulation_params(
 fn get_simulation_params_lstm(root_dir: &std::path::Path) -> Result<(usize, NaiveDateTime)> {
     use netcdf::open;
 
-    let forcing_path = root_dir.join("forcings").join("forcings.nc");
+    // let forcing_path = root_dir.join("forcings").join("forcings.nc");
+    let forcing_path = find_forcing_file(root_dir)
+        .with_context(|| format!("Failed to find forcing file in directory: {:?}", root_dir))?;
     let forcing_file = open(&forcing_path)
         .with_context(|| format!("Failed to open forcing file: {:?}", forcing_path))?;
 

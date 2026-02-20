@@ -35,3 +35,7 @@ burn-import = "0.18.0"
 opt-level = 3
 lto = true
 codegen-units = 1
+
+[profile.profiling]
+inherits = "release"
+debug = true
