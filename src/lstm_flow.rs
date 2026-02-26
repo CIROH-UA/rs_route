@@ -419,7 +419,7 @@ impl<B: Backend> LstmFlowGenerator<B> {
         })
     }
 
-    fn load_single_model(&self, training_config_path: &Path) -> Result<ModelInstance<B>> {
+    fn load_single_model(&self, training_config_path: &Path, use_hardcoded_weights: bool) -> Result<ModelInstance<B>> {
         let training_config = fs::read_to_string(training_config_path)?;
         let training_config: serde_yaml::Value = serde_yaml::from_str(&training_config)?;
 
@@ -545,11 +545,18 @@ impl<B: Backend> LstmFlowGenerator<B> {
             metadata.output_size,
         );
         model = model.load_record(record);
-        // model.load_json_weights(
-        model.load_weights(
-            &self.device,
-            burn_dir.join("weights.json").to_str().unwrap(),
-        );
+        if !use_hardcoded_weights {
+            model.load_json_weights(
+                &self.device,
+                burn_dir.join("weights.json").to_str().unwrap(),
+            );
+        } else {
+            model.load_weights(
+                &self.device,
+                burn_dir.join("weights.json").to_str().unwrap(),
+            );
+        }
+        
 
         Ok(ModelInstance {
             model,
@@ -601,6 +608,7 @@ impl<B: Backend> LstmFlowGenerator<B> {
         node_id: u32,
         area_sqkm: f32,
         max_timesteps: usize,
+        use_hardcoded_weights: bool,
     ) -> Result<VecDeque<f32>> {
         // Construct config path
         // let config_path = self
@@ -644,7 +652,7 @@ impl<B: Backend> LstmFlowGenerator<B> {
                     .as_str()
                     .ok_or(anyhow::anyhow!("train_cfg_file entry not a string"))?,
             );
-            models.push(self.load_single_model(training_config_path)?);
+            models.push(self.load_single_model(training_config_path, use_hardcoded_weights)?);
         }
 
         // Create a map of all available forcing values

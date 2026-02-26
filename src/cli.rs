@@ -19,6 +19,11 @@ struct Args {
     /// Use LSTM for flow generation instead of CSV files
     #[arg(short = 'l', long, default_value_t = false)]
     use_lstm: bool,
+    // Use hardcoded weights for LSTM flow generation instead of loading from file
+    // need to have capability to send '--use-hardcoded-weights false' or similar to disable,
+    // while having it be true by default
+    #[arg(short = 'j', long, default_value_t = false)]
+    use_json_weights: bool,
 }
 
 pub struct Config {
@@ -29,6 +34,7 @@ pub struct Config {
     pub output_dir: PathBuf,
     pub kernel: MuskingumCungeKernel,
     pub use_lstm: bool,
+    pub use_hardcoded_weights: bool,
 }
 
 pub fn get_args() -> Result<Config> {
@@ -56,5 +62,6 @@ pub fn get_args() -> Result<Config> {
         output_dir,
         kernel: args.kernel,
         use_lstm: args.use_lstm,
+        use_hardcoded_weights: !args.use_json_weights,
     })
 }
