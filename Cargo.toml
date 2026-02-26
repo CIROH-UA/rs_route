@@ -29,7 +29,7 @@ glob = "0.3.3"
 serde_yaml = "0.9.34"
 burn-import = "0.18.0"
 
-test_proc_macro = { path = "./test_proc_macro" }
+hardcode_weights = { path = "./hardcode_weights" }
 
 
 [profile.release]

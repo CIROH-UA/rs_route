@@ -1,4 +1,4 @@
-use test_proc_macro::hardcode_weights;
+use hardcode_weights::hardcode_weights;
 
 pub struct WeightConfig {
     pub input_size: usize,
