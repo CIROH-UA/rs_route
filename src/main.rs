@@ -1,3 +1,5 @@
+#![allow(warnings)]
+
 use anyhow::{Context, Result};
 use chrono::{Duration, NaiveDateTime};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -23,7 +25,12 @@ use network::build_network_topology;
 use routing::{process_routing_parallel, process_routing_parallel_with_lstm}; // Use the new function
 use lstm_flow::find_forcing_file;
 
+use test_proc_macro::test_macro;
+
+test_macro!();
+
 fn main() -> Result<()> {
+    test();
     // Configuration
     let config = get_args()?;
     let dt = config.internal_timestep_seconds as f32;
