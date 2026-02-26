@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 pub fn init_netcdf_output(
     output_dir: PathBuf,
     filename: &str,
-    num_flowpaths: usize,
+    _num_flowpaths: usize,
     timesteps: Vec<f64>,
     reference_time: &NaiveDateTime,
 ) -> Result<Arc<Mutex<FileMut>>> {
@@ -179,6 +179,7 @@ pub fn write_batch(
 }
 
 // Function to write results to NetCDF
+#[allow(dead_code)] // Suppress warnings about unused function, since it might be used later
 pub fn write_output(
     output_file: &Arc<Mutex<FileMut>>,
     results: &Arc<SimulationResults>,

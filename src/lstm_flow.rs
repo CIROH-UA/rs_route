@@ -13,6 +13,7 @@ use std::process::Command;
 
 pub static USE_HARD_CODED_WEIGHTS: bool = true;
 
+#[allow(dead_code)] // Suppress warnings about unused fields, since they might be used later
 #[derive(Clone)]
 pub struct NgenLstmConfig {
     pub root_dir: PathBuf,
@@ -129,6 +130,15 @@ mod lstm_model {
         pub head: Linear<B>,
     }
 
+    pub fn serde_to_vec(value: &Value) -> Vec<f32> {
+    value
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_f64().unwrap() as f32)
+        .collect()
+    }
+
     pub fn vec_to_tensor(input_vec: &Vec<f32>, shape: Vec<usize>) -> TensorData {
         let bytes_vec = input_vec
             .iter()
@@ -229,9 +239,38 @@ mod lstm_model {
                 .init(device);
             Self { lstm, head }
         }
-
-        fn try_get_builtin_weights(&self, weight_name: &str) -> Option<WeightConfig> {
-            match weight_name {
+        fn get_json_weights(weight_path: &str) -> Option<WeightConfig> {
+            let json_str = fs::read_to_string(weight_path);
+            if let Err(e) = json_str {
+                eprintln!("Error reading weights file at ({}): {}", weight_path, e);
+                return None;
+            }
+            let weights: Value = serde_json::from_str(&json_str.unwrap()).unwrap();
+            return Some(WeightConfig {
+                input_size: weights["input_size"].as_u64().unwrap() as usize,
+                hidden_size: weights["hidden_size"].as_u64().unwrap() as usize,
+                output_size: weights["output_size"].as_u64().unwrap() as usize,
+                input_gate_input_weights: serde_to_vec(&weights["lstm.input_gate.input_transform.weight"]),
+                input_gate_input_biases: serde_to_vec(&weights["lstm.input_gate.input_transform.bias"]),
+                input_gate_hidden_weights: serde_to_vec(&weights["lstm.input_gate.hidden_transform.weight"]),
+                input_gate_hidden_biases: serde_to_vec(&weights["lstm.input_gate.hidden_transform.bias"]),
+                forget_gate_input_weights: serde_to_vec(&weights["lstm.forget_gate.input_transform.weight"]),
+                forget_gate_input_biases: serde_to_vec(&weights["lstm.forget_gate.input_transform.bias"]),
+                forget_gate_hidden_weights: serde_to_vec(&weights["lstm.forget_gate.hidden_transform.weight"]),
+                forget_gate_hidden_biases: serde_to_vec(&weights["lstm.forget_gate.hidden_transform.bias"]),
+                cell_gate_input_weights: serde_to_vec(&weights["lstm.cell_gate.input_transform.weight"]),
+                cell_gate_input_biases: serde_to_vec(&weights["lstm.cell_gate.input_transform.bias"]),
+                cell_gate_hidden_weights: serde_to_vec(&weights["lstm.cell_gate.hidden_transform.weight"]),
+                cell_gate_hidden_biases: serde_to_vec(&weights["lstm.cell_gate.hidden_transform.bias"]),
+                output_gate_input_weights: serde_to_vec(&weights["lstm.output_gate.input_transform.weight"]),
+                output_gate_input_biases: serde_to_vec(&weights["lstm.output_gate.input_transform.bias"]),
+                output_gate_hidden_weights: serde_to_vec(&weights["lstm.output_gate.hidden_transform.weight"]),
+                output_gate_hidden_biases: serde_to_vec(&weights["lstm.output_gate.hidden_transform.bias"]),
+            });
+        }
+        fn get_hardcoded_weights(weight_path: &str) -> Option<WeightConfig> {
+            let weight_dirname: &str = weight_path.split('/').rev().nth(2).unwrap();
+            match weight_dirname {
                 "nh_AORC_hourly_25yr_1210_112435_7" => WeightConfig::nh_AORC_hourly_25yr_1210_112435_7(),
                 "nh_AORC_hourly_25yr_1210_112435_8" => WeightConfig::nh_AORC_hourly_25yr_1210_112435_8(),
                 "nh_AORC_hourly_25yr_1210_112435_9" => WeightConfig::nh_AORC_hourly_25yr_1210_112435_9(),
@@ -240,221 +279,61 @@ mod lstm_model {
                 "nh_AORC_hourly_slope_elev_precip_temp_seq999_seed101_2801_191806" => WeightConfig::nh_AORC_hourly_slope_elev_precip_temp_seq999_seed101_2801_191806(),
                 _ => None,
             }
-        }
-
-        fn load_weight_config(&mut self, device: &B::Device, weight_config: WeightConfig) {
-            let input_size = weight_config.input_size;
-            let hidden_size = weight_config.hidden_size;
-
+        }   
+        pub fn load_weightconfig(&mut self, device: &B::Device, weight_config: WeightConfig) {
             self.lstm.input_gate = create_gate_controller(
                 &weight_config.input_gate_input_weights,
                 &weight_config.input_gate_input_biases,
                 &weight_config.input_gate_hidden_weights,
                 &weight_config.input_gate_hidden_biases,
                 device,
-                input_size,
-                hidden_size,
+                weight_config.input_size,
+                weight_config.hidden_size,
             );
-
             self.lstm.forget_gate = create_gate_controller(
                 &weight_config.forget_gate_input_weights,
                 &weight_config.forget_gate_input_biases,
                 &weight_config.forget_gate_hidden_weights,
                 &weight_config.forget_gate_hidden_biases,
                 device,
-                input_size,
-                hidden_size,
+                weight_config.input_size,
+                weight_config.hidden_size,
             );
-
             self.lstm.cell_gate = create_gate_controller(
                 &weight_config.cell_gate_input_weights,
                 &weight_config.cell_gate_input_biases,
                 &weight_config.cell_gate_hidden_weights,
                 &weight_config.cell_gate_hidden_biases,
                 device,
-                input_size,
-                hidden_size,
+                weight_config.input_size,
+                weight_config.hidden_size,
             );
-
             self.lstm.output_gate = create_gate_controller(
                 &weight_config.output_gate_input_weights,
                 &weight_config.output_gate_input_biases,
                 &weight_config.output_gate_hidden_weights,
                 &weight_config.output_gate_hidden_biases,
                 device,
-                input_size,
-                hidden_size,
+                weight_config.input_size,
+                weight_config.hidden_size,
             );
         }
-
         pub fn load_json_weights(&mut self, device: &B::Device, weight_path: &str) {
-            // rustify_test section 0 start. 
-            // experimental functionality for optimizing weight loading.
-            let weight_dirname: &str = weight_path
-                .split('/')
-                .rev()
-                .nth(2)
-                .unwrap_or_else(|| panic!("Failed to parse weight path: {}", weight_path));
-            // Using builtin_weights: 10.0 seconds
-            let builtin_weights: Option<WeightConfig> = self.try_get_builtin_weights(weight_dirname);
-            if let Some(weight_config) = builtin_weights && USE_HARD_CODED_WEIGHTS {
-                // println!("Using built-in weights for {}", weight_dirname);
-                self.load_weight_config(device, weight_config);
-                return;
+            let weight_config = Self::get_json_weights(weight_path);
+            if weight_config.is_none() {
+                panic!("Failed to load weights from path: {}", weight_path);
+            } else {
+                self.load_weightconfig(device, weight_config.unwrap());
             }
-            // let target_path: String = format!("./rustify_test/{}.rs", weight_dirname);
-            // let need_conversion = !Path::new(&target_path).exists();
-            // let need_conversion: bool = !fs::exists(target_path.clone()).unwrap();
-            // let mut conversion_string: String = "use crate::rustify_test::example_weights::WeightConfig;\n\n".to_string();
-            // let first_indent = "    ";
-            // let second_indent = "        ";
-            // if need_conversion {
-            //     println!("Doing conversion for {}", weight_dirname);
-            //     fs::create_dir_all("./rustify_test").unwrap();
-            //     // fs::write(
-            //     //     &target_path,
-            //     //     "".to_string()
-            //     //     )
-            //     // .expect("Failed to write Rust file");
-            //     // implement the static weights as an impl for WeightConfig that returns a constructed WeightConfig struct with all the weights hardcoded in. This way we can load weights without parsing JSON in the future.
-            //     // conversion_string.push_str(&format!("impl WeightConfig {{\n    pub fn {}() -> Self {{\n        Self {{\n", weight_dirname));
-            //     conversion_string.push_str(&format!("impl WeightConfig {{\n{}pub fn {}() -> Self {{\n{}Self {{\n", first_indent, weight_dirname, second_indent));
-            // }
-            // rustify_test section 0 end.
-            let json_str = fs::read_to_string(weight_path).expect("Failed to read file");
-            let weights: Value = serde_json::from_str(&json_str).unwrap();
-
-            fn to_vec(value: &Value) -> Vec<f32> {
-                value
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|v| v.as_f64().unwrap() as f32)
-                    .collect()
-            }
-
-            let input_size = weights["input_size"].as_u64().unwrap() as usize;
-            let output_size = weights["output_size"].as_u64().unwrap() as usize;
-            let hidden_size = weights["hidden_size"].as_u64().unwrap() as usize;
-
-            // if need_conversion {
-            //     conversion_string.push_str(&format!("{}input_size: {},\n", second_indent, input_size));
-            //     conversion_string.push_str(&format!("{}hidden_size: {},\n", second_indent, hidden_size));
-            //     conversion_string.push_str(&format!("{}output_size: {},\n", second_indent, output_size));
-            // }
-
-            // Load all gate weights
-            let input_gate_input_weights =
-                to_vec(&weights["lstm.input_gate.input_transform.weight"]);
-            let input_gate_input_biases = to_vec(&weights["lstm.input_gate.input_transform.bias"]);
-            let input_gate_hidden_weights =
-                to_vec(&weights["lstm.input_gate.hidden_transform.weight"]);
-            let input_gate_hidden_biases =
-                to_vec(&weights["lstm.input_gate.hidden_transform.bias"]);
-
-            // if need_conversion {
-            //     // There are megabytes of weights, so we *do not* want individual values per line.
-            //     conversion_string.push_str(&format!("{}input_gate_input_weights: vec!{:?},\n", second_indent, input_gate_input_weights));
-            //     conversion_string.push_str(&format!("{}input_gate_input_biases: vec!{:?},\n", second_indent, input_gate_input_biases));
-            //     conversion_string.push_str(&format!("{}input_gate_hidden_weights: vec!{:?},\n", second_indent, input_gate_hidden_weights));
-            //     conversion_string.push_str(&format!("{}input_gate_hidden_biases: vec!{:?},\n", second_indent, input_gate_hidden_biases));
-            // }
-
-            self.lstm.input_gate = create_gate_controller(
-                &input_gate_input_weights,
-                &input_gate_input_biases,
-                &input_gate_hidden_weights,
-                &input_gate_hidden_biases,
-                device,
-                input_size,
-                hidden_size,
-            );
-
-            let forget_gate_input_weights =
-                to_vec(&weights["lstm.forget_gate.input_transform.weight"]);
-            let forget_gate_input_biases =
-                to_vec(&weights["lstm.forget_gate.input_transform.bias"]);
-            let forget_gate_hidden_weights =
-                to_vec(&weights["lstm.forget_gate.hidden_transform.weight"]);
-            let forget_gate_hidden_biases =
-                to_vec(&weights["lstm.forget_gate.hidden_transform.bias"]);
-
-            // if need_conversion {
-            //     conversion_string.push_str(&format!("{}forget_gate_input_weights: vec!{:?},\n", second_indent, forget_gate_input_weights));
-            //     conversion_string.push_str(&format!("{}forget_gate_input_biases: vec!{:?},\n", second_indent, forget_gate_input_biases));
-            //     conversion_string.push_str(&format!("{}forget_gate_hidden_weights: vec!{:?},\n", second_indent, forget_gate_hidden_weights));
-            //     conversion_string.push_str(&format!("{}forget_gate_hidden_biases: vec!{:?},\n", second_indent, forget_gate_hidden_biases));
-            // }
-
-            self.lstm.forget_gate = create_gate_controller(
-                &forget_gate_input_weights,
-                &forget_gate_input_biases,
-                &forget_gate_hidden_weights,
-                &forget_gate_hidden_biases,
-                device,
-                input_size,
-                hidden_size,
-            );
-
-            let cell_gate_input_weights = to_vec(&weights["lstm.cell_gate.input_transform.weight"]);
-            let cell_gate_input_biases = to_vec(&weights["lstm.cell_gate.input_transform.bias"]);
-            let cell_gate_hidden_weights =
-                to_vec(&weights["lstm.cell_gate.hidden_transform.weight"]);
-            let cell_gate_hidden_biases = to_vec(&weights["lstm.cell_gate.hidden_transform.bias"]);
-
-            // if need_conversion {
-            //     conversion_string.push_str(&format!("{}cell_gate_input_weights: vec!{:?},\n", second_indent, cell_gate_input_weights));
-            //     conversion_string.push_str(&format!("{}cell_gate_input_biases: vec!{:?},\n", second_indent, cell_gate_input_biases));
-            //     conversion_string.push_str(&format!("{}cell_gate_hidden_weights: vec!{:?},\n", second_indent, cell_gate_hidden_weights));
-            //     conversion_string.push_str(&format!("{}cell_gate_hidden_biases: vec!{:?},\n", second_indent, cell_gate_hidden_biases));
-            // }
-
-            self.lstm.cell_gate = create_gate_controller(
-                &cell_gate_input_weights,
-                &cell_gate_input_biases,
-                &cell_gate_hidden_weights,
-                &cell_gate_hidden_biases,
-                device,
-                input_size,
-                hidden_size,
-            );
-
-            let output_gate_input_weights =
-                to_vec(&weights["lstm.output_gate.input_transform.weight"]);
-            let output_gate_input_biases =
-                to_vec(&weights["lstm.output_gate.input_transform.bias"]);
-            let output_gate_hidden_weights =
-                to_vec(&weights["lstm.output_gate.hidden_transform.weight"]);
-            let output_gate_hidden_biases =
-                to_vec(&weights["lstm.output_gate.hidden_transform.bias"]);
-
-            // if need_conversion {
-            //     conversion_string.push_str(&format!("{}output_gate_input_weights: vec!{:?},\n", second_indent, output_gate_input_weights));
-            //     conversion_string.push_str(&format!("{}output_gate_input_biases: vec!{:?},\n", second_indent, output_gate_input_biases));
-            //     conversion_string.push_str(&format!("{}output_gate_hidden_weights: vec!{:?},\n", second_indent, output_gate_hidden_weights));
-            //     conversion_string.push_str(&format!("{}output_gate_hidden_biases: vec!{:?},\n", second_indent, output_gate_hidden_biases));
-            // }
-
-            self.lstm.output_gate = create_gate_controller(
-                &output_gate_input_weights,
-                &output_gate_input_biases,
-                &output_gate_hidden_weights,
-                &output_gate_hidden_biases,
-                device,
-                input_size,
-                hidden_size,
-            );
-
-            // if need_conversion {
-            //     conversion_string.push_str(&format!("    }}\n}}\n"));
-            //     fs::write(
-            //         &target_path,
-            //         conversion_string,
-            //      )
-            //     .expect("Failed to write Rust file");
-            // }
         }
-
+        pub fn load_weights(&mut self, device: &B::Device, weight_path: &str) {
+            // Try to load hardcoded weights first, then fall back to json loading if that fails
+            if USE_HARD_CODED_WEIGHTS && let Some(weight_config) = Self::get_hardcoded_weights(weight_path) {
+                self.load_weightconfig(device, weight_config);
+            } else {
+                self.load_json_weights(device, weight_path);
+            }
+        }
         pub fn forward(
             &self,
             input: Tensor<B, 3>,
@@ -666,7 +545,8 @@ impl<B: Backend> LstmFlowGenerator<B> {
             metadata.output_size,
         );
         model = model.load_record(record);
-        model.load_json_weights(
+        // model.load_json_weights(
+        model.load_weights(
             &self.device,
             burn_dir.join("weights.json").to_str().unwrap(),
         );

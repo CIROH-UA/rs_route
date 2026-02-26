@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use clap::{Parser, ValueEnum};
+use clap::ValueEnum;
 
 use crate::kernel::muskingum::route_rs::*;
 

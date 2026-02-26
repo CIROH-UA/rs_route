@@ -1,7 +1,5 @@
-#![allow(warnings)]
-
 use anyhow::{Context, Result};
-use chrono::{Duration, NaiveDateTime};
+use chrono::{DateTime, Duration, NaiveDateTime};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -48,7 +46,7 @@ fn main() -> Result<()> {
     let channel_params_map = network::load_channel_parameters(&conn, &topology, &column_config)?;
 
     // Set up CSV output if needed
-    let mut csv_writer = if matches!(output_format, OutputFormat::Csv | OutputFormat::Both) {
+    let csv_writer = if matches!(output_format, OutputFormat::Csv | OutputFormat::Both) {
         Some(io::csv::create_csv_writer("network_routing_results.csv")?)
     } else {
         None
@@ -200,8 +198,8 @@ fn get_simulation_params_lstm(root_dir: &std::path::Path) -> Result<(usize, Naiv
     // get the first time step from the forcing file
     let time = time_var.get_value::<i64, _>((0, 0))?;
     // this time is seconds since unix epoch
-    let reference_time = NaiveDateTime::from_timestamp_opt(time, 0)
-        .context("Failed to convert time to NaiveDateTime")?;
-
+    let reference_time: NaiveDateTime = DateTime::from_timestamp(time, 0)
+        .context("Failed to convert time to DateTime<Utc>")?
+        .naive_utc();
     Ok((max_external_steps, reference_time))
 }

@@ -1,8 +1,7 @@
 use crate::config::ChannelParams;
 use crate::io::csv::load_external_flows;
-use crate::io::netcdf::{write_batch, write_output};
+use crate::io::netcdf::write_batch;
 use crate::io::results::SimulationResults;
-use crate::kernel;
 use crate::kernel::muskingum::MuskingumCungeKernel;
 use crate::lstm_flow; // Import the module, not specific types
 use crate::lstm_flow::LstmFlowGenerator;
@@ -21,6 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 // Message types
+#[allow(dead_code)] // Suppress warnings about unused message variants, since they might be used later
 enum WriterMessage {
     WriteResults(Arc<SimulationResults>),
     Shutdown,
@@ -31,6 +31,7 @@ enum WorkerMessage {
     Shutdown,
 }
 
+#[allow(dead_code)] // Suppress warnings about unused message variants, since they might be used later
 enum SchedulerMessage {
     NodeCompleted(u32),
     Shutdown,
@@ -137,7 +138,7 @@ fn process_node_all_timesteps(
     };
 
     let mut external_flow = 0.0;
-    let mut upstream_flow = 0.0;
+    // let mut upstream_flow = 0.0;
 
     for _timestep in 0..max_timesteps {
         if _timestep % upsampling == 0 {
@@ -149,7 +150,7 @@ fn process_node_all_timesteps(
                 )
             })?;
         }
-        upstream_flow = inflow.pop_front().unwrap();
+        let upstream_flow = inflow.pop_front().unwrap();
 
         let result = kernel.exec(
             qup,
@@ -250,7 +251,7 @@ fn scheduler_thread(
     scheduler_rx: Receiver<SchedulerMessage>,
     worker_tx: Vec<Sender<WorkerMessage>>,
     total_nodes: usize,
-    completed_count: Arc<AtomicUsize>,
+    _completed_count: Arc<AtomicUsize>,
 ) -> Result<()> {
     // Track which nodes are ready to process
     let mut ready_nodes = VecDeque::new();

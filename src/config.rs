@@ -37,6 +37,7 @@ impl ColumnConfig {
 }
 
 // Output format configuration
+#[allow(dead_code)] // Suppress warnings about unused output formats, since they might be used later
 #[derive(Debug, Clone)]
 pub enum OutputFormat {
     Csv,

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::{Parser, command};
+use clap::Parser;
 use std::path::PathBuf;
 
 use crate::kernel::muskingum::MuskingumCungeKernel;

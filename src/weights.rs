@@ -1,5 +1,6 @@
 use hardcode_weights::hardcode_weights;
 
+#[allow(dead_code)] // suppress warning about the unused output_size field, since it might get used later
 pub struct WeightConfig {
     pub input_size: usize,
     pub hidden_size: usize,
