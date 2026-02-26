@@ -20,16 +20,25 @@ use cli::get_args;
 use config::{ChannelParams, ColumnConfig, OutputFormat};
 use io::netcdf::init_netcdf_output;
 use network::build_network_topology;
-use routing::{process_routing_parallel, process_routing_parallel_with_lstm}; // Use the new function
+use routing::process_routing_parallel;
 use lstm_flow::find_forcing_file;
 
 fn main() -> Result<()> {
     // Configuration
-    let config = get_args()?;
-    let dt = config.internal_timestep_seconds as f32;
-    let db_path = config.gpkg_file;
-    let csv_dir = config.csv_dir;
-    let output_format = OutputFormat::NetCdf;
+    let config: cli::Config = get_args()?;
+    let dt: f32 = config.internal_timestep_seconds as f32;
+    let db_path: std::path::PathBuf = config.gpkg_file;
+    let csv_dir: std::path::PathBuf = config.csv_dir;
+    let output_format: OutputFormat = OutputFormat::NetCdf;
+
+    if config.use_lstm {
+        println!("LSTM flow generation enabled");
+        if config.use_hardcoded_weights {
+            println!("LSTM hardcoded weights enabled");
+        } else {
+            println!("LSTM hardcoded weights disabled - loading weights from file");
+        }
+    }
 
     // Initialize SQLite connection
     let conn = rusqlite::Connection::open(&db_path)
@@ -114,29 +123,42 @@ fn main() -> Result<()> {
         }
     );
 
-    if !config.use_lstm {
-        process_routing_parallel(
-            config.kernel,
-            &topology,
-            &channel_params_map,
-            total_timesteps,
-            dt,
-            netcdf_writer,
-            Arc::new(pb),
-        )?;
-    } else {
-        process_routing_parallel_with_lstm(
-            config.kernel,
-            &topology,
-            &channel_params_map,
-            total_timesteps,
-            dt,
-            netcdf_writer,
-            Arc::new(pb),
-            Some(config.config_dir.parent().unwrap()),
-            config.use_lstm,
-        )?;
-    }
+    // if !config.use_lstm {
+    //     process_routing_parallel(
+    //         config.kernel,
+    //         &topology,
+    //         &channel_params_map,
+    //         total_timesteps,
+    //         dt,
+    //         netcdf_writer,
+    //         Arc::new(pb),
+    //     )?;
+    // } else {
+    //     process_routing_parallel_with_lstm(
+    //         config.kernel,
+    //         &topology,
+    //         &channel_params_map,
+    //         total_timesteps,
+    //         dt,
+    //         netcdf_writer,
+    //         Arc::new(pb),
+    //         Some(config.config_dir.parent().unwrap()),
+    //         config.use_lstm,
+    //     )?;
+    // }
+    // both functions use the same end result? why use if statement and not pass the bool directly?
+    process_routing_parallel(
+        config.kernel,
+        &topology,
+        &channel_params_map,
+        total_timesteps,
+        dt,
+        netcdf_writer,
+        Arc::new(pb),
+        Some(config.config_dir.parent().unwrap()),
+        config.use_lstm,
+        config.use_hardcoded_weights, // Pass the new flag
+    )?;
 
     // Final flush for CSV
     if let Some(mut wtr) = csv_writer {

@@ -47,6 +47,7 @@ fn process_node_all_timesteps(
     dt: f32,
     lstm_generator: Option<&LstmFlowGenerator<Candle>>, // Add LSTM generator parameter
     use_lstm: bool,                                     // Flag to control LSTM usage
+    use_hardcoded_weights: bool, // Flag to choose if the lstm should try to use hardcoded weights or load from json
 ) -> Result<SimulationResults> {
     let node = topology
         .nodes
@@ -63,7 +64,7 @@ fn process_node_all_timesteps(
     let mut external_flows = if use_lstm {
         if let Some(lstm_gen) = lstm_generator {
             // Try to generate flows using LSTM
-            match lstm_gen.generate_flows_for_node(*node_id, area, max_timesteps) {
+            match lstm_gen.generate_flows_for_node(*node_id, area, max_timesteps, use_hardcoded_weights) {
                 Ok(flows) => flows,
                 Err(e) => {
                     // Fall back to CSV if LSTM fails
@@ -334,6 +335,7 @@ fn worker_thread(
     progress_bar: Arc<ProgressBar>,
     lstm_config: Option<Arc<lstm_flow::NgenLstmConfig>>, // Shared config only
     use_lstm: bool,
+    use_hardcoded_weights: bool,
 ) -> Result<()> {
     // Create per-thread LSTM generator if needed
     let lstm_generator = if use_lstm && lstm_config.is_some() {
@@ -362,6 +364,7 @@ fn worker_thread(
                         dt,
                         lstm_generator.as_ref(),
                         use_lstm && lstm_generator.is_some(),
+                        use_hardcoded_weights, 
                     ) {
                         Ok(results) => {
                             let results_arc = Arc::new(results);
@@ -433,31 +436,33 @@ fn worker_thread(
     Ok(())
 }
 
-// Main parallel routing function with LSTM support
-pub fn process_routing_parallel(
-    kernel: MuskingumCungeKernel,
-    topology: &NetworkTopology,
-    channel_params_map: &HashMap<u32, ChannelParams>,
-    max_timesteps: usize,
-    dt: f32,
-    output_file: Arc<Mutex<FileMut>>,
-    progress_bar: Arc<ProgressBar>,
-) -> Result<()> {
-    process_routing_parallel_with_lstm(
-        kernel,
-        topology,
-        channel_params_map,
-        max_timesteps,
-        dt,
-        output_file,
-        progress_bar,
-        None,  // No LSTM by default
-        false, // Don't use LSTM by default
-    )
-}
+// // Main parallel routing function with LSTM support
+// pub fn process_routing_parallel(
+//     kernel: MuskingumCungeKernel,
+//     topology: &NetworkTopology,
+//     channel_params_map: &HashMap<u32, ChannelParams>,
+//     max_timesteps: usize,
+//     dt: f32,
+//     output_file: Arc<Mutex<FileMut>>,
+//     progress_bar: Arc<ProgressBar>,
+// ) -> Result<()> {
+//     process_routing_parallel_with_lstm(
+//         kernel,
+//         topology,
+//         channel_params_map,
+//         max_timesteps,
+//         dt,
+//         output_file,
+//         progress_bar,
+//         None,  // No LSTM by default
+//         false, // Don't use LSTM by default
+//     )
+// }
 
 // New function that supports LSTM
-pub fn process_routing_parallel_with_lstm(
+// Note: renamed from process_routing_parallel_with_lstm to process_routing_parallel
+// and removed the old function to simplify
+pub fn process_routing_parallel(
     kernel: MuskingumCungeKernel,
     topology: &NetworkTopology,
     channel_params_map: &HashMap<u32, ChannelParams>,
@@ -467,6 +472,7 @@ pub fn process_routing_parallel_with_lstm(
     progress_bar: Arc<ProgressBar>,
     root_dir: Option<&Path>, // Root directory for LSTM config
     use_lstm: bool,          // Flag to enable LSTM
+    use_hardcoded_weights: bool, // Flag to enable hardcoded weights in LSTM generation
 ) -> Result<()> {
     let total_nodes = topology.nodes.len();
     let completed_count = Arc::new(AtomicUsize::new(0));
@@ -534,6 +540,7 @@ pub fn process_routing_parallel_with_lstm(
                 pb,
                 lstm_cfg, // Pass config, not generator
                 use_lstm,
+                use_hardcoded_weights,
             ) {
                 eprintln!("Worker {} error: {}", i, e);
             }
