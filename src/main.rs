@@ -104,6 +104,7 @@ fn main() -> Result<()> {
         dt,
         netcdf_writer,
         Arc::new(pb),
+        config.num_threads,
     )?;
 
     // Final flush for CSV

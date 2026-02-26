@@ -1,8 +1,8 @@
+use crate::kernel::muskingum::MuskingumCungeKernel;
 use anyhow::{Context, Result};
 use clap::Parser;
+use num_cpus;
 use std::path::PathBuf;
-
-use crate::kernel::muskingum::MuskingumCungeKernel;
 
 /// Network routing simulation tool
 #[derive(Parser, Debug)]
@@ -16,6 +16,8 @@ struct Args {
     internal_timestep_seconds: usize,
     #[arg(short, long, default_value_t = MuskingumCungeKernel::TRouteModernized)]
     kernel: MuskingumCungeKernel,
+    #[arg(short, long, default_value_t = num_cpus::get())]
+    num_threads: usize,
 }
 
 pub struct Config {
@@ -25,6 +27,7 @@ pub struct Config {
     pub internal_timestep_seconds: usize,
     pub output_dir: PathBuf,
     pub kernel: MuskingumCungeKernel,
+    pub num_threads: usize,
 }
 
 pub fn get_args() -> Result<Config> {
@@ -51,5 +54,6 @@ pub fn get_args() -> Result<Config> {
         internal_timestep_seconds: args.internal_timestep_seconds,
         output_dir,
         kernel: args.kernel,
+        num_threads: args.num_threads,
     })
 }
