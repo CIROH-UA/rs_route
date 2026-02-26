@@ -121,7 +121,7 @@ mod lstm_model {
     use serde_json::Value;
     use std::fs;
 
-    use crate::{lstm_flow::USE_HARD_CODED_WEIGHTS, rustify_test::example_weights::WeightConfig};
+    use crate::{lstm_flow::USE_HARD_CODED_WEIGHTS, weights::WeightConfig};
 
     #[derive(Module, Debug)]
     pub struct NextgenLstm<B: Backend> {
@@ -232,12 +232,12 @@ mod lstm_model {
 
         fn try_get_builtin_weights(&self, weight_name: &str) -> Option<WeightConfig> {
             match weight_name {
-                "nh_AORC_hourly_25yr_1210_112435_7" => Some(WeightConfig::nh_AORC_hourly_25yr_1210_112435_7()),
-                "nh_AORC_hourly_25yr_1210_112435_8" => Some(WeightConfig::nh_AORC_hourly_25yr_1210_112435_8()),
-                "nh_AORC_hourly_25yr_1210_112435_9" => Some(WeightConfig::nh_AORC_hourly_25yr_1210_112435_9()),
-                "nh_AORC_hourly_25yr_seq999_seed101_0701_143442" => Some(WeightConfig::nh_AORC_hourly_25yr_seq999_seed101_0701_143442()),
-                "nh_AORC_hourly_25yr_seq999_seed103_2701_171540" => Some(WeightConfig::nh_AORC_hourly_25yr_seq999_seed103_2701_171540()),
-                "nh_AORC_hourly_slope_elev_precip_temp_seq999_seed101_2801_191806" => Some(WeightConfig::nh_AORC_hourly_slope_elev_precip_temp_seq999_seed101_2801_191806()),
+                "nh_AORC_hourly_25yr_1210_112435_7" => WeightConfig::nh_AORC_hourly_25yr_1210_112435_7(),
+                "nh_AORC_hourly_25yr_1210_112435_8" => WeightConfig::nh_AORC_hourly_25yr_1210_112435_8(),
+                "nh_AORC_hourly_25yr_1210_112435_9" => WeightConfig::nh_AORC_hourly_25yr_1210_112435_9(),
+                "nh_AORC_hourly_25yr_seq999_seed101_0701_143442" => WeightConfig::nh_AORC_hourly_25yr_seq999_seed101_0701_143442(),
+                "nh_AORC_hourly_25yr_seq999_seed103_2701_171540" => WeightConfig::nh_AORC_hourly_25yr_seq999_seed103_2701_171540(),
+                "nh_AORC_hourly_slope_elev_precip_temp_seq999_seed101_2801_191806" => WeightConfig::nh_AORC_hourly_slope_elev_precip_temp_seq999_seed101_2801_191806(),
                 _ => None,
             }
         }

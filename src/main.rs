@@ -16,7 +16,7 @@ mod state;
 pub mod kernel {
     pub mod muskingum;
 }
-mod rustify_test;
+mod weights;
 
 use cli::get_args;
 use config::{ChannelParams, ColumnConfig, OutputFormat};
