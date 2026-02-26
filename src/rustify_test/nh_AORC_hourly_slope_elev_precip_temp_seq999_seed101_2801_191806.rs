@@ -3,7 +3,7 @@ use test_proc_macro::refresh_hardcoded_weights;
 
 #[rustfmt::skip]
 impl WeightConfig {
-    // #[refresh_hardcoded_weights("/ngen/ngen/extern/lstm/trained_neuralhydrology_models/nh_AORC_hourly_slope_elev_precip_temp_seq999_seed101_2801_191806/burn/weights.json")]
+    #[refresh_hardcoded_weights("/ngen/ngen/extern/lstm/trained_neuralhydrology_models/nh_AORC_hourly_slope_elev_precip_temp_seq999_seed101_2801_191806/burn/weights.json")]
     pub fn nh_AORC_hourly_slope_elev_precip_temp_seq999_seed101_2801_191806() -> Self {
         Self {
             input_size: 4,
