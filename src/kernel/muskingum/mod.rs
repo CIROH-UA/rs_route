@@ -2,10 +2,10 @@ use std::fmt::Display;
 
 use clap::ValueEnum;
 
-use crate::kernel::muskingum::route_rs::*;
+use crate::kernel::muskingum::rs_route::*;
 
 pub mod t_route;
-pub mod route_rs {
+pub mod rs_route {
     pub mod mc_kernel;
 }
 pub mod c_mc;

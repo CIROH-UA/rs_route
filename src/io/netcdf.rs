@@ -76,7 +76,7 @@ pub fn init_netcdf_output(
     depth_var.put_attribute("missing_value", -9999.0f32)?;
 
     // Global attributes
-    file.add_attribute("TITLE", "OUTPUT FROM ROUTE_RS")?;
+    file.add_attribute("TITLE", "OUTPUT FROM RS-ROUTE")?;
     file.add_attribute(
         "file_reference_time",
         reference_time.format("%Y-%m-%d_%H:%M:%S").to_string(),

@@ -1,16 +1,16 @@
 [package]
-name = "route_rs"
+name = "rs_route"
 version = "0.2.0"
 edition = "2024"
 description = "A cli tool for muskingum-cunge routing in ngiab"
 license = "AGPL-3.0"
 
 [build-dependencies]
-anyhow = "*"
+anyhow = "1.0.98"
 
 [[bin]]
-name = "force-build"
-path = "build.rs"
+name = "rs-route"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.98"
