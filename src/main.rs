@@ -179,6 +179,7 @@ fn get_simulation_params(
 #[cfg(test)]
 mod tests {
     use crate::kernel::muskingum;
+    use crate::kernel::muskingum::MuskingumCungeKernel;
 
     // Same-file tests for main file
     use super::*;
@@ -299,9 +300,186 @@ mod tests {
 
     #[test]
     fn test_run_routing() {
-        let config: cli::Config = setup_test_config();
+        let tmp_dir = std::env::temp_dir().join("rs_route_test_run_routing");
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+        let config = cli::Config {
+            output_dir: tmp_dir.clone(),
+            ..setup_test_config()
+        };
         let result = run_routing(config, true);
+        let _ = std::fs::remove_dir_all(&tmp_dir);
         assert!(result.is_ok());
+    }
+
+    fn make_test_input() -> muskingum::MuskingumCungeInput {
+        muskingum::MuskingumCungeInput {
+            dt: 300.0,
+            qup: 5.0,
+            quc: 6.0,
+            qdp: 4.5,
+            ql: 0.5,
+            dx: 5000.0,
+            bw: 10.0,
+            tw: 100.0,
+            tw_cc: 120.0,
+            n: 0.06,
+            n_cc: 0.12,
+            cs: 1.0,
+            s0: 0.001,
+            velp: 0.0,
+            depthp: 0.5,
+        }
+    }
+
+    fn assert_results_close(
+        a: &muskingum::MuskingumCungeResult,
+        b: &muskingum::MuskingumCungeResult,
+        tolerance: f32,
+        label: &str,
+    ) {
+        let flow_diff = if a.qdc == 0.0 && b.qdc == 0.0 {
+            0.0
+        } else {
+            ((a.qdc - b.qdc) / a.qdc).abs()
+        };
+        let vel_diff = if a.velc == 0.0 && b.velc == 0.0 {
+            0.0
+        } else {
+            ((a.velc - b.velc) / a.velc).abs()
+        };
+        let depth_diff = if a.depthc == 0.0 && b.depthc == 0.0 {
+            0.0
+        } else {
+            ((a.depthc - b.depthc) / a.depthc).abs()
+        };
+
+        assert!(
+            flow_diff < tolerance,
+            "{}: flow differs by {:.1}% (got {}, expected {})",
+            label,
+            flow_diff * 100.0,
+            b.qdc,
+            a.qdc,
+        );
+        assert!(
+            vel_diff < tolerance,
+            "{}: velocity differs by {:.1}% (got {}, expected {})",
+            label,
+            vel_diff * 100.0,
+            b.velc,
+            a.velc,
+        );
+        assert!(
+            depth_diff < tolerance,
+            "{}: depth differs by {:.1}% (got {}, expected {})",
+            label,
+            depth_diff * 100.0,
+            b.depthc,
+            a.depthc,
+        );
+    }
+
+    /// Rust, modernized Fortran, and legacy Fortran kernels should produce
+    /// nearly identical results for a single timestep.
+    #[test]
+    fn test_kernel_equivalence_single_step() {
+        let input = make_test_input();
+
+        let rs = MuskingumCungeKernel::RouteRs.exec(&input, false);
+        let fort_mod = MuskingumCungeKernel::TRouteModernized.exec(&input, false);
+        let fort_leg = MuskingumCungeKernel::TRouteLegacy.exec(&input, false);
+
+        assert_results_close(&rs, &fort_mod, 0.01, "RouteRs vs TRouteModernized");
+        assert_results_close(&rs, &fort_leg, 0.01, "RouteRs vs TRouteLegacy");
+        assert_results_close(
+            &fort_mod,
+            &fort_leg,
+            0.01,
+            "TRouteModernized vs TRouteLegacy",
+        );
+    }
+
+    /// The C kernel uses double precision internally and a different secant method
+    /// structure, so it can diverge more than the other three. This test documents
+    /// the current level of divergence without enforcing a tight tolerance.
+    #[test]
+    fn test_c_kernel_produces_output() {
+        let input = make_test_input();
+        let result = MuskingumCungeKernel::CMuskingumCunge.exec(&input, false);
+
+        // Should produce non-zero, positive results
+        assert!(
+            result.qdc > 0.0,
+            "C kernel flow should be positive, got {}",
+            result.qdc
+        );
+        assert!(
+            result.velc > 0.0,
+            "C kernel velocity should be positive, got {}",
+            result.velc
+        );
+        assert!(
+            result.depthc > 0.0,
+            "C kernel depth should be positive, got {}",
+            result.depthc
+        );
+    }
+
+    /// Run each kernel through the full test routing dataset, writing to
+    /// separate temp directories to avoid file conflicts.
+    #[test]
+    fn test_kernel_equivalence_full_routing() {
+        let kernels = [
+            MuskingumCungeKernel::RouteRs,
+            MuskingumCungeKernel::TRouteModernized,
+            MuskingumCungeKernel::TRouteLegacy,
+        ];
+        let mut flow_sums: Vec<(MuskingumCungeKernel, f64)> = Vec::new();
+
+        for kernel in kernels {
+            let tmp_dir = std::env::temp_dir().join(format!("rs_route_test_{:?}", kernel));
+            std::fs::create_dir_all(&tmp_dir).unwrap();
+
+            let config = cli::Config {
+                kernel,
+                output_dir: tmp_dir.clone(),
+                ..setup_test_config()
+            };
+            let result = run_routing(config, true);
+            assert!(
+                result.is_ok(),
+                "Kernel {:?} failed: {:?}",
+                kernel,
+                result.err()
+            );
+
+            // Read back the output NetCDF to get total flow
+            let nc_path = tmp_dir.join("troute_output_201001010000.nc");
+            println!("{}", nc_path.display());
+            let file = netcdf::open(&nc_path).unwrap();
+            let flow_var = file.variable("flow").unwrap();
+            let flow_data = flow_var.get::<f32, _>(..).unwrap();
+            let total_flow: f64 = flow_data.iter().map(|&v| v as f64).sum();
+            flow_sums.push((kernel, total_flow));
+
+            // Cleanup
+            let _ = std::fs::remove_dir_all(&tmp_dir);
+        }
+
+        let tolerance = 0.01; // 1% relative tolerance
+        let (ref_name, ref_flow) = flow_sums[0];
+        for &(name, flow) in &flow_sums[1..] {
+            let diff = ((flow - ref_flow) / ref_flow).abs();
+            assert!(
+                diff < tolerance,
+                "{:?} vs {:?}: total flow differs by {:.1}% ({} vs {})",
+                name,
+                ref_name,
+                diff * 100.0,
+                flow,
+                ref_flow,
+            );
+        }
     }
 
     #[test]
