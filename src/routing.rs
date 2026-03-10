@@ -64,7 +64,12 @@ fn process_node_all_timesteps(
     let mut external_flows = if use_lstm {
         if let Some(lstm_gen) = lstm_generator {
             // Try to generate flows using LSTM
-            match lstm_gen.generate_flows_for_node(*node_id, area, max_timesteps, use_hardcoded_weights) {
+            match lstm_gen.generate_flows_for_node(
+                *node_id,
+                area,
+                max_timesteps,
+                use_hardcoded_weights,
+            ) {
                 Ok(flows) => flows,
                 Err(e) => {
                     // Fall back to CSV if LSTM fails
@@ -364,7 +369,7 @@ fn worker_thread(
                         dt,
                         lstm_generator.as_ref(),
                         use_lstm && lstm_generator.is_some(),
-                        use_hardcoded_weights, 
+                        use_hardcoded_weights,
                     ) {
                         Ok(results) => {
                             let results_arc = Arc::new(results);
@@ -436,32 +441,6 @@ fn worker_thread(
     Ok(())
 }
 
-// // Main parallel routing function with LSTM support
-// pub fn process_routing_parallel(
-//     kernel: MuskingumCungeKernel,
-//     topology: &NetworkTopology,
-//     channel_params_map: &HashMap<u32, ChannelParams>,
-//     max_timesteps: usize,
-//     dt: f32,
-//     output_file: Arc<Mutex<FileMut>>,
-//     progress_bar: Arc<ProgressBar>,
-// ) -> Result<()> {
-//     process_routing_parallel_with_lstm(
-//         kernel,
-//         topology,
-//         channel_params_map,
-//         max_timesteps,
-//         dt,
-//         output_file,
-//         progress_bar,
-//         None,  // No LSTM by default
-//         false, // Don't use LSTM by default
-//     )
-// }
-
-// New function that supports LSTM
-// Note: renamed from process_routing_parallel_with_lstm to process_routing_parallel
-// and removed the old function to simplify
 pub fn process_routing_parallel(
     kernel: MuskingumCungeKernel,
     topology: &NetworkTopology,
@@ -470,8 +449,8 @@ pub fn process_routing_parallel(
     dt: f32,
     output_file: Arc<Mutex<FileMut>>,
     progress_bar: Arc<ProgressBar>,
-    root_dir: Option<&Path>, // Root directory for LSTM config
-    use_lstm: bool,          // Flag to enable LSTM
+    root_dir: Option<&Path>,     // Root directory for LSTM config
+    use_lstm: bool,              // Flag to enable LSTM
     use_hardcoded_weights: bool, // Flag to enable hardcoded weights in LSTM generation
 ) -> Result<()> {
     let total_nodes = topology.nodes.len();

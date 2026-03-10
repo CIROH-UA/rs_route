@@ -19,9 +19,9 @@ mod weights;
 use cli::get_args;
 use config::{ChannelParams, ColumnConfig, OutputFormat};
 use io::netcdf::init_netcdf_output;
+use lstm_flow::find_forcing_file;
 use network::build_network_topology;
 use routing::process_routing_parallel;
-use lstm_flow::find_forcing_file;
 
 fn main() -> Result<()> {
     // Configuration
@@ -123,30 +123,6 @@ fn main() -> Result<()> {
         }
     );
 
-    // if !config.use_lstm {
-    //     process_routing_parallel(
-    //         config.kernel,
-    //         &topology,
-    //         &channel_params_map,
-    //         total_timesteps,
-    //         dt,
-    //         netcdf_writer,
-    //         Arc::new(pb),
-    //     )?;
-    // } else {
-    //     process_routing_parallel_with_lstm(
-    //         config.kernel,
-    //         &topology,
-    //         &channel_params_map,
-    //         total_timesteps,
-    //         dt,
-    //         netcdf_writer,
-    //         Arc::new(pb),
-    //         Some(config.config_dir.parent().unwrap()),
-    //         config.use_lstm,
-    //     )?;
-    // }
-    // both functions use the same end result? why use if statement and not pass the bool directly?
     process_routing_parallel(
         config.kernel,
         &topology,
