@@ -1,3 +1,23 @@
+/// C implementation of Muskingum-Cunge routing.
+///
+/// Known issues that cause significant divergence from the Fortran/Rust kernels:
+///
+///   - Uses `double` precision internally while input/output are `float`, causing
+///     different rounding behavior throughout the computation.
+///
+///   - Bug when `cs == 0`: sets `z = 1.0` then immediately overwrites to `z = sqrt(2)`,
+///     and `sqrt_1z2` is left uninitialized (muskingumcunge.c lines 194-196).
+///
+///   - Different secant method structure: uses separate left/right QHC structs with
+///     different Xmin values (0.0 for left vs 0.25 for right).
+///
+///   - Different negative-flow handling: the else branch (line 302) always computes
+///     `fmax` of two terms even when total flow is positive, whereas Fortran/Rust
+///     return the flow sum directly.
+///
+///   - The C QVD_float struct has `cn, ck` field order while the Rust
+///     MuskingumCungeResult has `ck, cn` — the ck/cn values are swapped in the
+///     returned result (does not affect flow/velocity/depth).
 use crate::kernel::muskingum::MuskingumCungeResult;
 
 #[repr(C)]

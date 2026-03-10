@@ -379,24 +379,26 @@ mod tests {
         );
     }
 
-    /// Rust, modernized Fortran, and legacy Fortran kernels should produce
-    /// nearly identical results for a single timestep.
+    /// The two Fortran kernels (modernized and legacy) should produce
+    /// near-identical results for a single timestep.
     #[test]
-    fn test_kernel_equivalence_single_step() {
+    fn test_kernel_equivalence_fortran_kernels() {
         let input = make_test_input();
+        let f_mod = MuskingumCungeKernel::TRouteModernized.exec(&input, false);
+        let f_leg = MuskingumCungeKernel::TRouteLegacy.exec(&input, false);
+        let tolerance = 0.0001; //0.01%
 
+        assert_results_close(&f_mod, &f_leg, tolerance, "Fortran Modernized vs Legacy");
+    }
+
+    /// The Rust kernel should closely match the Fortran kernels.
+    #[test]
+    fn test_kernel_equivalence_rust_vs_fortran() {
+        let input = make_test_input();
         let rs = MuskingumCungeKernel::RouteRs.exec(&input, false);
-        let fort_mod = MuskingumCungeKernel::TRouteModernized.exec(&input, false);
-        let fort_leg = MuskingumCungeKernel::TRouteLegacy.exec(&input, false);
-
-        assert_results_close(&rs, &fort_mod, 0.01, "RouteRs vs TRouteModernized");
-        assert_results_close(&rs, &fort_leg, 0.01, "RouteRs vs TRouteLegacy");
-        assert_results_close(
-            &fort_mod,
-            &fort_leg,
-            0.01,
-            "TRouteModernized vs TRouteLegacy",
-        );
+        let f_mod = MuskingumCungeKernel::TRouteModernized.exec(&input, false);
+        let tolerance = 0.0001; //0.01%
+        assert_results_close(&rs, &f_mod, tolerance, "RouteRs vs TRouteModernized");
     }
 
     /// The C kernel uses double precision internally and a different secant method
@@ -466,7 +468,7 @@ mod tests {
             let _ = std::fs::remove_dir_all(&tmp_dir);
         }
 
-        let tolerance = 0.01; // 1% relative tolerance
+        let tolerance = 0.0001; //0.01% relative tolerance
         let (ref_name, ref_flow) = flow_sums[0];
         for &(name, flow) in &flow_sums[1..] {
             let diff = ((flow - ref_flow) / ref_flow).abs();
