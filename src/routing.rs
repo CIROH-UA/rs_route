@@ -31,13 +31,52 @@ enum SchedulerMessage {
     Shutdown,
 }
 
+/// Linearly interpolate a single f32 value.
+fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
+
+/// Interpolate channel parameters between two sets at fraction `t` (0→a, 1→b).
+/// `dx` is NOT interpolated – it is set by the subdivision logic.
+fn lerp_params(a: &ChannelParams, b: &ChannelParams, t: f32) -> ChannelParams {
+    ChannelParams {
+        dx: 0.0, // caller sets this
+        n: lerp(a.n, b.n, t),
+        ncc: lerp(a.ncc, b.ncc, t),
+        s0: lerp(a.s0, b.s0, t),
+        bw: lerp(a.bw, b.bw, t),
+        tw: lerp(a.tw, b.tw, t),
+        twcc: lerp(a.twcc, b.twcc, t),
+        cs: lerp(a.cs, b.cs, t),
+    }
+}
+
+/// Average channel parameters from multiple upstream nodes.
+fn average_params(params_list: &[&ChannelParams]) -> ChannelParams {
+    let n = params_list.len() as f32;
+    ChannelParams {
+        dx: params_list.iter().map(|p| p.dx).sum::<f32>() / n,
+        n: params_list.iter().map(|p| p.n).sum::<f32>() / n,
+        ncc: params_list.iter().map(|p| p.ncc).sum::<f32>() / n,
+        s0: params_list.iter().map(|p| p.s0).sum::<f32>() / n,
+        bw: params_list.iter().map(|p| p.bw).sum::<f32>() / n,
+        tw: params_list.iter().map(|p| p.tw).sum::<f32>() / n,
+        twcc: params_list.iter().map(|p| p.twcc).sum::<f32>() / n,
+        cs: params_list.iter().map(|p| p.cs).sum::<f32>() / n,
+    }
+}
+
 // Process all timesteps for a single node, optionally subdividing the reach
 // into shorter sections when `subdivision_target_length` > 0.
+// When subdivided, channel parameters are interpolated from upstream_params
+// through channel_params to downstream_params along the reach.
 fn process_node_all_timesteps(
     kernel: MuskingumCungeKernel,
     node_id: &u32,
     topology: &NetworkTopology,
     channel_params: &ChannelParams,
+    upstream_params: Option<&ChannelParams>,
+    downstream_params: Option<&ChannelParams>,
     max_timesteps: usize,
     dt: f32,
     subdivision_target_length: f32,
@@ -56,11 +95,6 @@ fn process_node_all_timesteps(
     let mut external_flows =
         load_external_flows(node.qlat_file.clone(), &node.id, Some(&"Q_OUT"), area)?;
 
-    let s0 = if channel_params.s0 == 0.0 {
-        0.00001
-    } else {
-        channel_params.s0
-    };
     let mut inflow = node
         .inflow_storage
         .lock()
@@ -100,6 +134,32 @@ fn process_node_all_timesteps(
     };
     let section_dx = total_length / num_sections as f32;
 
+    // Precompute interpolated channel params for each section.
+    // The interpolation goes: upstream_params → channel_params → downstream_params
+    // with channel_params at the midpoint of the reach.
+    let up = upstream_params.unwrap_or(channel_params);
+    let down = downstream_params.unwrap_or(channel_params);
+    let section_params: Vec<ChannelParams> = (0..num_sections)
+        .map(|s| {
+            if num_sections == 1 {
+                channel_params.clone()
+            } else {
+                // t goes from 0 (upstream end) to 1 (downstream end)
+                // section center position
+                let t = (s as f32 + 0.5) / num_sections as f32;
+                if t <= 0.5 {
+                    // First half: interpolate from upstream_params to channel_params
+                    // t=0 → upstream, t=0.5 → current
+                    lerp_params(up, channel_params, t * 2.0)
+                } else {
+                    // Second half: interpolate from channel_params to downstream_params
+                    // t=0.5 → current, t=1.0 → downstream
+                    lerp_params(channel_params, down, (t - 0.5) * 2.0)
+                }
+            }
+        })
+        .collect();
+
     // Per-section state arrays
     let mut section_qup = vec![0.0_f32; num_sections];
     let mut section_qdp = vec![0.0_f32; num_sections];
@@ -129,6 +189,8 @@ fn process_node_all_timesteps(
         let mut last_result = MuskingumCungeResult::default();
 
         for s in 0..num_sections {
+            let sp = &section_params[s];
+            let section_s0 = if sp.s0 == 0.0 { 0.00001 } else { sp.s0 };
             last_result = kernel.exec(
                 &MuskingumCungeInput {
                     dt,
@@ -137,13 +199,13 @@ fn process_node_all_timesteps(
                     qdp: section_qdp[s],
                     ql: section_ql,
                     dx: section_dx,
-                    bw: channel_params.bw,
-                    tw: channel_params.tw,
-                    tw_cc: channel_params.twcc,
-                    n: channel_params.n,
-                    n_cc: channel_params.ncc,
-                    cs: channel_params.cs,
-                    s0,
+                    bw: sp.bw,
+                    tw: sp.tw,
+                    tw_cc: sp.twcc,
+                    n: sp.n,
+                    n_cc: sp.ncc,
+                    cs: sp.cs,
+                    s0: section_s0,
                     velp: 0.0, // unused
                     depthp: section_depthp[s],
                 },
@@ -306,11 +368,36 @@ fn worker_thread(
             Ok(WorkerMessage::ProcessNode(node_id)) => {
                 // Process the node
                 if let Some(params) = channel_params_map.get(&node_id) {
+                    // Look up upstream/downstream params for interpolation
+                    let upstream_params = topology
+                        .nodes
+                        .get(&node_id)
+                        .and_then(|node| {
+                            let up_params: Vec<&ChannelParams> = node
+                                .upstream_ids
+                                .iter()
+                                .filter_map(|uid| channel_params_map.get(uid))
+                                .collect();
+                            if up_params.is_empty() {
+                                None
+                            } else {
+                                Some(average_params(&up_params))
+                            }
+                        });
+                    let downstream_params = topology
+                        .nodes
+                        .get(&node_id)
+                        .and_then(|node| node.downstream_id)
+                        .and_then(|did| channel_params_map.get(&did))
+                        .cloned();
+
                     match process_node_all_timesteps(
                         kernel,
                         &node_id,
                         &topology,
                         params,
+                        upstream_params.as_ref(),
+                        downstream_params.as_ref(),
                         max_timesteps,
                         dt,
                         subdivision_target_length,
@@ -529,7 +616,7 @@ mod tests {
 
         // No subdivision
         let result_no_sub = process_node_all_timesteps(
-            kernel, &node_id, &topology, params, max_timesteps, dt, -1.0,
+            kernel, &node_id, &topology, params, None, None, max_timesteps, dt, -1.0,
         )
         .unwrap();
 
@@ -549,6 +636,8 @@ mod tests {
             &node_id,
             &topology,
             params,
+            None,
+            None,
             max_timesteps,
             dt,
             params.dx, // target = full length => 1 section
@@ -585,7 +674,7 @@ mod tests {
 
         // No subdivision
         let result_no_sub = process_node_all_timesteps(
-            kernel, &node_id, &topology, params, max_timesteps, dt, -1.0,
+            kernel, &node_id, &topology, params, None, None, max_timesteps, dt, -1.0,
         )
         .unwrap();
 
@@ -601,7 +690,7 @@ mod tests {
 
         // Subdivision with 300m target (node is ~6910m, so ~24 sections)
         let result_subdivided = process_node_all_timesteps(
-            kernel, &node_id, &topology, params, max_timesteps, dt, 300.0,
+            kernel, &node_id, &topology, params, None, None, max_timesteps, dt, 300.0,
         )
         .unwrap();
 
