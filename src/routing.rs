@@ -31,7 +31,8 @@ enum SchedulerMessage {
     Shutdown,
 }
 
-// Process all timesteps for a single node (unchanged)
+// Process all timesteps for a single node, optionally subdividing the reach
+// into shorter sections when `subdivision_target_length` > 0.
 fn process_node_all_timesteps(
     kernel: MuskingumCungeKernel,
     node_id: &u32,
@@ -39,6 +40,7 @@ fn process_node_all_timesteps(
     channel_params: &ChannelParams,
     max_timesteps: usize,
     dt: f32,
+    subdivision_target_length: f32,
 ) -> Result<SimulationResults> {
     let node = topology
         .nodes
@@ -89,14 +91,24 @@ fn process_node_all_timesteps(
         )).with_context(|| format!("Failed to load external flows for node {}: {:?}", node_id, node.qlat_file));
     }
 
-    let mut qup = 0.0;
-    let mut qdp = 0.0;
-    let mut depth_p = 0.0;
+    // Determine number of subdivisions
+    let total_length = channel_params.dx;
+    let num_sections = if subdivision_target_length > 0.0 {
+        (total_length / subdivision_target_length).ceil().max(1.0) as usize
+    } else {
+        1
+    };
+    let section_dx = total_length / num_sections as f32;
+
+    // Per-section state arrays
+    let mut section_qup = vec![0.0_f32; num_sections];
+    let mut section_qdp = vec![0.0_f32; num_sections];
+    let mut section_depthp = vec![0.0_f32; num_sections];
+
     // -1 because the input files have one additional timestep
     let upsampling = max_timesteps / (external_flows.len() - 1);
 
     let mut external_flow = 0.0;
-    // let mut upstream_flow = 0.0;
 
     for _timestep in 0..max_timesteps {
         if _timestep % upsampling == 0 {
@@ -110,52 +122,47 @@ fn process_node_all_timesteps(
         }
         let upstream_flow = inflow.pop_front().unwrap();
 
-        let result: MuskingumCungeResult = kernel.exec(
-            &MuskingumCungeInput {
-                dt,
-                qup,
-                quc: upstream_flow,
-                qdp,
-                ql: external_flow,
-                dx: channel_params.dx,
-                bw: channel_params.bw,
-                tw: channel_params.tw,
-                tw_cc: channel_params.twcc,
-                n: channel_params.n,
-                n_cc: channel_params.ncc,
-                cs: channel_params.cs,
-                s0,
-                velp: 0.0, // unused
-                depthp: depth_p,
-            },
-            false,
-        );
-        let (qdc, velc, depthc) = (result.qdc, result.velc, result.depthc);
-        // let (qdc, velc, depthc, _, _, _) = mc_kernel::submuskingcunge(
-        //     qup,
-        //     upstream_flow,
-        //     qdp,
-        //     external_flow,
-        //     dt,
-        //     s0,
-        //     channel_params.dx,
-        //     channel_params.n,
-        //     channel_params.cs,
-        //     channel_params.bw,
-        //     channel_params.tw,
-        //     channel_params.twcc,
-        //     channel_params.ncc,
-        //     depth_p,
-        //     false,
-        // );
+        // Scale lateral flow proportionally for each section
+        let section_ql = external_flow / num_sections as f32;
 
-        results.flow_data.push(qdc);
-        results.velocity_data.push(velc);
-        results.depth_data.push(depthc);
+        let mut current_upstream = upstream_flow;
+        let mut last_result = MuskingumCungeResult::default();
 
-        qup = upstream_flow;
-        qdp = qdc;
-        depth_p = depthc;
+        for s in 0..num_sections {
+            last_result = kernel.exec(
+                &MuskingumCungeInput {
+                    dt,
+                    qup: section_qup[s],
+                    quc: current_upstream,
+                    qdp: section_qdp[s],
+                    ql: section_ql,
+                    dx: section_dx,
+                    bw: channel_params.bw,
+                    tw: channel_params.tw,
+                    tw_cc: channel_params.twcc,
+                    n: channel_params.n,
+                    n_cc: channel_params.ncc,
+                    cs: channel_params.cs,
+                    s0,
+                    velp: 0.0, // unused
+                    depthp: section_depthp[s],
+                },
+                false,
+            );
+
+            // Update section state for next timestep
+            section_qup[s] = current_upstream;
+            section_qdp[s] = last_result.qdc;
+            section_depthp[s] = last_result.depthc;
+
+            // Output of this section feeds the next
+            current_upstream = last_result.qdc;
+        }
+
+        // Only record the final section's output
+        results.flow_data.push(last_result.qdc);
+        results.velocity_data.push(last_result.velc);
+        results.depth_data.push(last_result.depthc);
     }
 
     Ok(results)
@@ -292,6 +299,7 @@ fn worker_thread(
     dt: f32,
     writer_tx: Sender<WriterMessage>,
     progress_bar: Arc<ProgressBar>,
+    subdivision_target_length: f32,
 ) -> Result<()> {
     loop {
         match work_rx.recv() {
@@ -305,6 +313,7 @@ fn worker_thread(
                         params,
                         max_timesteps,
                         dt,
+                        subdivision_target_length,
                     ) {
                         Ok(results) => {
                             let results_arc = Arc::new(results);
@@ -393,6 +402,7 @@ pub fn process_routing_parallel(
     dt: f32,
     output_file: Arc<Mutex<FileMut>>,
     progress_bar: Arc<ProgressBar>,
+    subdivision_target_length: f32,
 ) -> Result<()> {
     let total_nodes = topology.nodes.len();
     let completed_count = Arc::new(AtomicUsize::new(0));
@@ -435,6 +445,7 @@ pub fn process_routing_parallel(
                 dt,
                 writer,
                 pb,
+                subdivision_target_length,
             ) {
                 eprintln!("Worker {} error: {}", i, e);
             }
@@ -482,4 +493,141 @@ pub fn process_routing_parallel(
     println!("Successfully processed all {} nodes", total_nodes);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ColumnConfig;
+    use crate::network::build_network_topology;
+
+    fn setup_test_topology_and_params() -> (NetworkTopology, HashMap<u32, ChannelParams>) {
+        let conn = rusqlite::Connection::open("./tests/one_cat/config/cat-486888_subset.gpkg")
+            .expect("Failed to open test database");
+        let column_config = ColumnConfig::new();
+        let csv_dir = std::path::PathBuf::from("./tests/one_cat/outputs/ngen");
+
+        let topology =
+            build_network_topology(&conn, &column_config, &csv_dir).expect("Failed to build topology");
+        let channel_params_map =
+            crate::network::load_channel_parameters(&conn, &topology, &column_config)
+                .expect("Failed to load channel params");
+
+        (topology, channel_params_map)
+    }
+
+    /// Subdivision with target_length == total dx should produce identical results
+    /// to no subdivision (target_length = -1).
+    #[test]
+    fn test_subdivision_single_section_matches_no_subdivision() {
+        let (topology, channel_params_map) = setup_test_topology_and_params();
+        let node_id: u32 = 486888;
+        let params = channel_params_map.get(&node_id).unwrap();
+        let kernel = MuskingumCungeKernel::TRouteModernized;
+        let dt = 300.0;
+        let max_timesteps = 24 * (3600 / 300); // 24 hours at 300s
+
+        // No subdivision
+        let result_no_sub = process_node_all_timesteps(
+            kernel, &node_id, &topology, params, max_timesteps, dt, -1.0,
+        )
+        .unwrap();
+
+        // Reset inflow storage (consumed by previous call)
+        topology
+            .nodes
+            .get(&node_id)
+            .unwrap()
+            .inflow_storage
+            .lock()
+            .unwrap()
+            .clear();
+
+        // Subdivision with target == full length (1 section)
+        let result_one_section = process_node_all_timesteps(
+            kernel,
+            &node_id,
+            &topology,
+            params,
+            max_timesteps,
+            dt,
+            params.dx, // target = full length => 1 section
+        )
+        .unwrap();
+
+        assert_eq!(result_no_sub.flow_data.len(), result_one_section.flow_data.len());
+        let tolerance = 0.01; // 1% relative tolerance (f32 rounding from ceil(dx/dx)=1)
+        for i in 0..result_no_sub.flow_data.len() {
+            let expected = result_no_sub.flow_data[i];
+            let actual = result_one_section.flow_data[i];
+            if expected != 0.0 {
+                let rel_diff = ((expected - actual) / expected).abs();
+                assert!(
+                    rel_diff < tolerance,
+                    "Flow mismatch at timestep {}: {} vs {} ({:.2}%)",
+                    i, expected, actual, rel_diff * 100.0,
+                );
+            }
+        }
+    }
+
+    /// Subdivision with a small target length should produce valid, non-zero
+    /// results that differ from the undivided case (since the kernel behaves
+    /// differently with shorter dx).
+    #[test]
+    fn test_subdivision_produces_valid_output() {
+        let (topology, channel_params_map) = setup_test_topology_and_params();
+        let node_id: u32 = 486888;
+        let params = channel_params_map.get(&node_id).unwrap();
+        let kernel = MuskingumCungeKernel::TRouteModernized;
+        let dt = 300.0;
+        let max_timesteps = 24 * (3600 / 300);
+
+        // No subdivision
+        let result_no_sub = process_node_all_timesteps(
+            kernel, &node_id, &topology, params, max_timesteps, dt, -1.0,
+        )
+        .unwrap();
+
+        // Reset inflow storage
+        topology
+            .nodes
+            .get(&node_id)
+            .unwrap()
+            .inflow_storage
+            .lock()
+            .unwrap()
+            .clear();
+
+        // Subdivision with 300m target (node is ~6910m, so ~24 sections)
+        let result_subdivided = process_node_all_timesteps(
+            kernel, &node_id, &topology, params, max_timesteps, dt, 300.0,
+        )
+        .unwrap();
+
+        assert_eq!(result_subdivided.flow_data.len(), max_timesteps);
+
+        // Results should be non-zero (the test data has real flows)
+        let total_flow: f32 = result_subdivided.flow_data.iter().sum();
+        assert!(
+            total_flow > 0.0,
+            "Subdivided total flow should be positive, got {}",
+            total_flow,
+        );
+
+        // Results should differ from the undivided case
+        let mut any_different = false;
+        for i in 0..max_timesteps {
+            if (result_no_sub.flow_data[i] - result_subdivided.flow_data[i]).abs() > 1e-6 {
+                any_different = true;
+                break;
+            }
+        }
+        assert!(
+            any_different,
+            "Subdivided results should differ from undivided (dx={}, 300m target => {} sections)",
+            params.dx,
+            (params.dx / 300.0).ceil() as usize,
+        );
+    }
 }

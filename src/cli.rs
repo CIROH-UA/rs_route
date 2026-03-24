@@ -16,6 +16,11 @@ struct Args {
     internal_timestep_seconds: usize,
     #[arg(short, long, default_value_t = MuskingumCungeKernel::TRouteModernized)]
     kernel: MuskingumCungeKernel,
+
+    /// Target subdivision length in meters. Reaches longer than this will be
+    /// subdivided into sections of approximately this length. Default: no subdivision.
+    #[arg(short = 's', long, default_value_t = -1.0)]
+    subdivision_target_length: f32,
 }
 
 pub struct Config {
@@ -25,6 +30,7 @@ pub struct Config {
     pub internal_timestep_seconds: usize,
     pub output_dir: PathBuf,
     pub kernel: MuskingumCungeKernel,
+    pub subdivision_target_length: f32,
 }
 
 pub fn get_args() -> Result<Config> {
@@ -74,6 +80,7 @@ pub fn get_args() -> Result<Config> {
         internal_timestep_seconds: args.internal_timestep_seconds,
         output_dir,
         kernel: args.kernel,
+        subdivision_target_length: args.subdivision_target_length,
     })
 }
 
@@ -88,6 +95,7 @@ mod tests {
         let args = Args::parse_from(["test", "test_route_dir"]);
         assert_eq!(args.route_dir, PathBuf::from("test_route_dir"));
         assert_eq!(args.internal_timestep_seconds, 300);
+        assert_eq!(args.subdivision_target_length, -1.0);
         match args.kernel {
             MuskingumCungeKernel::TRouteModernized => {}
             _ => panic!("Expected default kernel to be TRouteModernized"),
@@ -111,10 +119,4 @@ mod tests {
             _ => panic!("Expected kernel to be TRouteLegacy"),
         }
     }
-    // Impossible to test get_args(), as it pulls from the program's actual command line arguments, which we can't easily manipulate.
-    // #[test]
-    // fn test_get_args_invalid_root() {
-    //     let result = get_args();
-    //     assert!(result.is_err());
-    // }
 }
