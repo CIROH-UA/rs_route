@@ -8,28 +8,36 @@ Author: Brodie Alexander <baalexander2 [at] crimson.ua.edu>
 Last Updated - 30 March 2026 by Brodie Alexander
 
 */
+// macro_rules! call_kernel {
+//     ($fn:path, $i:expr, $courant:expr) => {
+//         $fn(
+//             $i.qup, $i.quc, $i.qdp, $i.ql, $i.dt, $i.s0, $i.dx, $i.n, $i.cs, $i.bw, $i.tw,
+//             $i.tw_cc, $i.n_cc, $i.depthp, $courant,
+//         )
+//     };
+// }
 
 pub fn muskingum_cunge(
-    dt: f32,
     qup: f32,
     quc: f32,
     qdp: f32,
     ql: f32,
+    dt: f32,
+    s0: f32,
     dx: f32,
+    n: f32,
+    cs: f32,
     bw: f32,
     tw: f32,
     twcc: f32,
-    n: f32,
+
     ncc: f32,
-    cs: f32,
-    s0: f32,
+
     depthp: f32,
-    mut qdc: f32,
-    mut velc: f32,
-    mut ck: f32,
-    mut cn: f32,
-    mut x: f32,
+
+    _courant: bool,
 ) -> MuskingumCungeResult {
+    let (mut qdc, mut velc, mut ck, mut cn, mut x) = (0.0, 0.0, 0.0, 0.0, 0.0);
     let mut h_1 = 0.0;
     let mut Qj = 0.0;
     let mut Qj_0 = 0.0;
@@ -66,17 +74,19 @@ pub fn muskingum_cunge(
 
             'do_while_large_error: while rerror > 0.01 && aerror >= mindepth && iter <= maxiter {
                 let sec = secant2_h(
-                    z, bw, bfd, twcc, s0, n, ncc, dt, dx, qdp, ql, qup, quc, h_0, 1,
+                    z, bw, bfd, twcc, s0, n, ncc, dt, dx, qdp, ql, qup, quc, h_0, 1, &mut Qj_0,
+                    &mut C1, &mut C2, &mut C3, &mut C4, &mut x,
                 );
-                Qj_0 = sec.Qj;
+                // Qj_0 = sec.Qj;
 
                 let sec = secant2_h(
-                    z, bw, bfd, twcc, s0, n, ncc, dt, dx, qdp, ql, qup, quc, h, 2,
+                    z, bw, bfd, twcc, s0, n, ncc, dt, dx, qdp, ql, qup, quc, h, 2, &mut Qj,
+                    &mut C1, &mut C2, &mut C3, &mut C4, &mut x,
                 );
-                x = sec.x;
+                // x = sec.x;
 
-                Qj = sec.Qj;
-                (C1, C2, C3, C4) = (sec.C1, sec.C2, sec.C3, sec.C4);
+                // Qj = sec.Qj;
+                // (C1, C2, C3, C4) = (sec.C1, sec.C2, sec.C3, sec.C4);
 
                 if (Qj_0 - Qj) != 0.0 {
                     h_1 = h - ((Qj * (h_0 - h)) / (Qj_0 - Qj));
@@ -184,9 +194,20 @@ fn secant2_h(
     quc: f32,
     h: f32,
     interval: i32,
+    Qj: &mut f32,
+    C1: &mut f32,
+    C2: &mut f32,
+    C3: &mut f32,
+    C4: &mut f32,
+    X: &mut f32,
 ) -> Secant2H {
     let mut sec = Secant2H {
-        ..Default::default()
+        Qj: *Qj,
+        C1: *C1,
+        C2: *C2,
+        C3: *C3,
+        C4: *C4,
+        x: *X,
     };
 
     let (mut twl, mut wl) = (0.0, 0.0);
@@ -282,6 +303,12 @@ fn secant2_h(
     } else {
         0.0
     };
+    *Qj = sec.Qj;
+    *C1 = sec.C1;
+    *C2 = sec.C2;
+    *C3 = sec.C3;
+    *C4 = sec.C4;
+    *X = sec.x;
     sec
 }
 
