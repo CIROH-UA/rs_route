@@ -252,8 +252,8 @@ fn scheduler_thread(
                         if let Some(count) = pending_downstream_count.get_mut(&downstream_id) {
                             *count = count.saturating_sub(1);
                             if *count == 0 {
-                                // All upstream nodes are complete, this node is ready
-                                ready_nodes.push_back(downstream_id);
+                                // Prioritize downstream nodes to free inflow buffers sooner
+                                ready_nodes.push_front(downstream_id);
                                 pending_downstream_count.remove(&downstream_id);
                             }
                         }
