@@ -104,7 +104,7 @@ pub fn write_batch(
         .ok_or_else(|| anyhow::anyhow!("feature_id variable not found"))?;
     let start_idx = feature_var.len();
 
-    // Prepare all data arrays
+    // Prepare all data arrays (already downsampled by workers)
     let mut all_feature_ids = Vec::with_capacity(batch.len());
     let mut all_flows = Vec::new();
     let mut all_velocities = Vec::new();
@@ -117,16 +117,9 @@ pub fn write_batch(
 
     for results in batch {
         all_feature_ids.push(results.feature_id);
-
-        // Downsample data
-        let actual_timesteps = results.flow_data.len();
-        let downsampling = actual_timesteps / expected_timesteps;
-
-        for i in (downsampling - 1..actual_timesteps).step_by(downsampling) {
-            all_flows.push(results.flow_data[i]);
-            all_velocities.push(results.velocity_data[i]);
-            all_depths.push(results.depth_data[i]);
-        }
+        all_flows.extend_from_slice(&results.flow_data);
+        all_velocities.extend_from_slice(&results.velocity_data);
+        all_depths.extend_from_slice(&results.depth_data);
     }
 
     // Write all feature IDs at once

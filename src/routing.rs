@@ -281,6 +281,28 @@ fn scheduler_thread(
     Ok(())
 }
 
+// Downsample full-resolution results to output frequency
+fn downsample_results(results: SimulationResults, downsampling: usize) -> SimulationResults {
+    if downsampling <= 1 {
+        return results;
+    }
+    let actual_timesteps = results.flow_data.len();
+    let mut flow_data = Vec::with_capacity(actual_timesteps / downsampling);
+    let mut velocity_data = Vec::with_capacity(actual_timesteps / downsampling);
+    let mut depth_data = Vec::with_capacity(actual_timesteps / downsampling);
+    for i in (downsampling - 1..actual_timesteps).step_by(downsampling) {
+        flow_data.push(results.flow_data[i]);
+        velocity_data.push(results.velocity_data[i]);
+        depth_data.push(results.depth_data[i]);
+    }
+    SimulationResults {
+        feature_id: results.feature_id,
+        flow_data,
+        velocity_data,
+        depth_data,
+    }
+}
+
 // Worker thread - now just receives work and processes it
 fn worker_thread(
     kernel: MuskingumCungeKernel,
@@ -290,6 +312,7 @@ fn worker_thread(
     channel_params_map: Arc<HashMap<u32, ChannelParams>>,
     max_timesteps: usize,
     dt: f32,
+    downsampling: usize,
     writer_tx: Sender<WriterMessage>,
     progress_bar: Arc<ProgressBar>,
 ) -> Result<()> {
@@ -307,16 +330,7 @@ fn worker_thread(
                         dt,
                     ) {
                         Ok(results) => {
-                            let results_arc = Arc::new(results);
-
-                            // Send results to writer
-                            if let Err(e) = writer_tx
-                                .send(WriterMessage::WriteResults(Arc::clone(&results_arc)))
-                            {
-                                eprintln!("Failed to send results to writer: {}", e);
-                            }
-
-                            // Pass flow to downstream node
+                            // Pass full-resolution flow to downstream node
                             if let Some(node) = topology.nodes.get(&node_id) {
                                 if let Some(downstream_id) = node.downstream_id {
                                     if let Some(downstream_node) =
@@ -330,9 +344,9 @@ fn worker_thread(
                                                 )
                                             })?;
                                         if buffer.is_empty() {
-                                            buffer.resize(results_arc.flow_data.len(), 0.0);
+                                            buffer.resize(results.flow_data.len(), 0.0);
                                         }
-                                        for (i, &flow) in results_arc.flow_data.iter().enumerate() {
+                                        for (i, &flow) in results.flow_data.iter().enumerate() {
                                             if i < buffer.len() {
                                                 buffer[i] += flow;
                                             }
@@ -346,11 +360,19 @@ fn worker_thread(
                                 })?;
                                 *status = NodeStatus::Ready;
 
-                                // Clear inflow storage
+                                // Free inflow storage memory
                                 let mut old_inflow = node.inflow_storage.lock().map_err(|e| {
                                     anyhow::anyhow!("Failed to lock inflow storage: {}", e)
                                 })?;
-                                old_inflow.clear();
+                                *old_inflow = VecDeque::new();
+                            }
+
+                            // Downsample then send to writer
+                            let downsampled = downsample_results(results, downsampling);
+                            if let Err(e) = writer_tx
+                                .send(WriterMessage::WriteResults(Arc::new(downsampled)))
+                            {
+                                eprintln!("Failed to send results to writer: {}", e);
                             }
                         }
                         Err(e) => {
@@ -387,17 +409,18 @@ fn worker_thread(
 // Main parallel routing function
 pub fn process_routing_parallel(
     kernel: MuskingumCungeKernel,
-    topology: &NetworkTopology,
-    channel_params_map: &HashMap<u32, ChannelParams>,
+    topology: Arc<NetworkTopology>,
+    channel_params_map: Arc<HashMap<u32, ChannelParams>>,
     max_timesteps: usize,
     dt: f32,
+    downsampling: usize,
     output_file: Arc<Mutex<FileMut>>,
     progress_bar: Arc<ProgressBar>,
 ) -> Result<()> {
     let total_nodes = topology.nodes.len();
     let completed_count = Arc::new(AtomicUsize::new(0));
-    let topology_arc = Arc::new(topology.clone());
-    let channel_params_arc = Arc::new(channel_params_map.clone());
+    let topology_arc = topology;
+    let channel_params_arc = channel_params_map;
 
     // Create channels
     let (writer_tx, writer_rx) = mpsc::channel();
@@ -433,6 +456,7 @@ pub fn process_routing_parallel(
                 params,
                 max_timesteps,
                 dt,
+                downsampling,
                 writer,
                 pb,
             ) {

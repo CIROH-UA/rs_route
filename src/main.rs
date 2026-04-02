@@ -72,8 +72,8 @@ fn run_routing(config: cli::Config, quiet: bool) -> Result<()> {
     let end_time = start_time + Duration::seconds((3600 * max_external_steps) as i64);
 
     let external_timestep_seconds = 3600;
-    let total_timesteps =
-        (max_external_steps) * (external_timestep_seconds / config.internal_timestep_seconds);
+    let downsampling = external_timestep_seconds / config.internal_timestep_seconds;
+    let total_timesteps = max_external_steps * downsampling;
 
     println!("\nSimulation Configuration:");
     println!("  Period: {} to {}", start_time, end_time);
@@ -114,10 +114,11 @@ fn run_routing(config: cli::Config, quiet: bool) -> Result<()> {
     println!("\nStarting parallel wave-front routing...");
     process_routing_parallel(
         config.kernel,
-        &topology,
-        &channel_params_map,
+        Arc::new(topology),
+        Arc::new(channel_params_map),
         total_timesteps,
         dt,
+        downsampling,
         netcdf_writer,
         Arc::new(pb),
     )?;

@@ -82,69 +82,8 @@ impl NetworkTopology {
         }
     }
 
-    pub fn topological_sort(&mut self) -> Result<()> {
-        let mut in_degree: HashMap<u32, usize> = HashMap::new();
-        let mut queue: VecDeque<u32> = VecDeque::new();
-
-        // Calculate in-degrees
-        for id in self.nodes.keys() {
-            in_degree.insert(*id, 0);
-        }
-
-        for node in self.nodes.values() {
-            if let Some(downstream) = &node.downstream_id {
-                if let Some(degree) = in_degree.get_mut(downstream) {
-                    *degree += 1;
-                }
-            }
-        }
-
-        // Find nodes with no incoming edges (headwaters)
-        for (id, &degree) in &in_degree {
-            if degree == 0 {
-                queue.push_back(*id);
-                if let Some(node) = self.nodes.get_mut(id) {
-                    let mut status = node
-                        .status
-                        .write()
-                        .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {}", e))?;
-                    *status = NodeStatus::Ready;
-                }
-            }
-        }
-
-        if queue.is_empty() {
-            return Err(anyhow::anyhow!(
-                "No headwater nodes found - possible cycle in network"
-            ));
-        }
-
-        self.routing_order.clear();
-
-        while let Some(current) = queue.pop_front() {
-            self.routing_order.push(current);
-
-            if let Some(node) = self.nodes.get(&current) {
-                if let Some(downstream) = &node.downstream_id {
-                    if let Some(degree) = in_degree.get_mut(downstream) {
-                        *degree -= 1;
-                        if *degree == 0 {
-                            queue.push_back(*downstream);
-                        }
-                    }
-                }
-            }
-        }
-
-        if self.routing_order.len() != self.nodes.len() {
-            return Err(anyhow::anyhow!(
-                "Cycle detected in network topology: processed {} nodes out of {}",
-                self.routing_order.len(),
-                self.nodes.len()
-            ));
-        }
-
-        Ok(())
+    pub fn collect_node_ids(&mut self) {
+        self.routing_order = self.nodes.keys().copied().collect();
     }
 }
 
@@ -194,8 +133,8 @@ pub fn build_network_topology(
     // Build upstream connections
     topology.build_upstream_connections();
 
-    // Perform topological sort to get routing order
-    topology.topological_sort()?;
+    // Collect node IDs (scheduling order is handled by the scheduler thread)
+    topology.collect_node_ids();
 
     println!("Network topology built with {} nodes", topology.nodes.len());
     println!(
