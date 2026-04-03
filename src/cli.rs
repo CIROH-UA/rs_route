@@ -1,9 +1,9 @@
+use crate::kernel::muskingum::MuskingumCungeKernel;
 use anyhow::{Context, Result};
 use clap::Parser;
+use colored::Colorize;
+use num_cpus;
 use std::path::PathBuf;
-
-use crate::kernel::muskingum::MuskingumCungeKernel;
-
 /// Network routing simulation tool
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -16,8 +16,20 @@ struct Args {
     internal_timestep_seconds: usize,
     #[arg(short, long, default_value_t = MuskingumCungeKernel::TRouteModernized)]
     kernel: MuskingumCungeKernel,
+    #[arg(short, long, default_value_t = num_cpus::get())]
+    num_threads: usize,
 }
-
+pub fn print_banner(config: &Config) {
+    eprintln!("   {}", "🌊 Route RS".cyan().bold());
+    eprintln!("  Kernel:   {}", format!("{}", config.kernel).green());
+    eprintln!("  Timestep: {}s", config.internal_timestep_seconds);
+    eprintln!("  Threads:  {}", config.num_threads);
+    eprintln!(
+        "  GeoPackage: {}",
+        config.gpkg_file.display().to_string().dimmed()
+    );
+    eprintln!();
+}
 pub struct Config {
     pub config_dir: PathBuf,
     pub csv_dir: PathBuf,
@@ -25,6 +37,7 @@ pub struct Config {
     pub internal_timestep_seconds: usize,
     pub output_dir: PathBuf,
     pub kernel: MuskingumCungeKernel,
+    pub num_threads: usize,
 }
 
 pub fn get_args() -> Result<Config> {
@@ -66,15 +79,17 @@ pub fn get_args() -> Result<Config> {
         .find(|entry| entry.path().extension().map_or(false, |ext| ext == "gpkg"))
         .ok_or_else(|| anyhow::anyhow!("No .gpkg file found in config directory"))?
         .path();
-
-    Ok(Config {
+    let cfg = Config {
         config_dir,
         csv_dir,
         gpkg_file,
         internal_timestep_seconds: args.internal_timestep_seconds,
         output_dir,
         kernel: args.kernel,
-    })
+        num_threads: args.num_threads,
+    };
+    print_banner(&cfg);
+    Ok(cfg)
 }
 
 #[cfg(test)]

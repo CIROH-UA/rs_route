@@ -416,6 +416,7 @@ pub fn process_routing_parallel(
     downsampling: usize,
     output_file: Arc<Mutex<FileMut>>,
     progress_bar: Arc<ProgressBar>,
+    num_threads: usize,
 ) -> Result<()> {
     let total_nodes = topology.nodes.len();
     let completed_count = Arc::new(AtomicUsize::new(0));
@@ -427,7 +428,6 @@ pub fn process_routing_parallel(
     let (scheduler_tx, scheduler_rx) = mpsc::channel();
 
     // Create worker channels
-    let num_threads = num_cpus::get();
     println!(
         "Using {} worker threads for parallel processing",
         num_threads

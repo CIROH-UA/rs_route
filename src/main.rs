@@ -121,6 +121,7 @@ fn run_routing(config: cli::Config, quiet: bool) -> Result<()> {
         downsampling,
         netcdf_writer,
         Arc::new(pb),
+        config.num_threads,
     )?;
 
     // Final flush for CSV
