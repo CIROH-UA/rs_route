@@ -3,11 +3,13 @@ use std::fmt::Display;
 use clap::ValueEnum;
 
 use crate::kernel::muskingum::rs_route::*;
-
+#[allow(clippy::too_many_arguments, non_snake_case)]
 pub mod t_route;
 pub mod rs_route {
+    #[allow(clippy::too_many_arguments, non_snake_case, unused)]
     pub mod mc_kernel;
 }
+#[allow(clippy::too_many_arguments, non_snake_case)]
 pub mod c_mc;
 
 //     type, bind(c) :: muskingum_cunge_input_t
@@ -85,7 +87,7 @@ pub struct MuskingumCungeInput {
 ///     } QVD_float;
 ///
 #[repr(C)]
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct MuskingumCungeResult {
     /// flow downstream current timestep
     pub qdc: f32,
@@ -126,7 +128,7 @@ impl MuskingumCungeKernel {
     ) -> MuskingumCungeResult {
         match self {
             MuskingumCungeKernel::RouteRs => {
-                call_kernel!(mc_kernel::submuskingcunge, input, calculate_courant)
+                call_kernel!(mc_kernel::muskingum_cunge, input, calculate_courant)
             }
             MuskingumCungeKernel::TRouteModernized => call_kernel!(
                 t_route::fortran_modernized::submuskingcunge,
