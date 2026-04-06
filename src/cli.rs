@@ -11,8 +11,20 @@ struct Args {
     /// Route directory path
     route_dir: PathBuf,
 
+    /// Path to the GeoPackage (.gpkg) hydrofabric file
+    #[arg(long)]
+    hf: Option<PathBuf>,
+
+    /// Path to the input directory containing CSV files
+    #[arg(short = 'i', long)]
+    input_dir: Option<PathBuf>,
+
+    /// Path to the output directory
+    #[arg(short, long)]
+    output_dir: Option<PathBuf>,
+
     /// Internal timestep in seconds
-    #[arg(short, long, default_value_t = 300)]
+    #[arg(short = 't', long, default_value_t = 300)]
     internal_timestep_seconds: usize,
     #[arg(short, long, default_value_t = MuskingumCungeKernel::TRouteModernized)]
     kernel: MuskingumCungeKernel,
@@ -44,9 +56,9 @@ pub fn get_args() -> Result<Config> {
     let args = Args::parse();
 
     let root_dir = args.route_dir;
-    let csv_dir = root_dir.join("outputs").join("ngen");
+    let csv_dir = args.input_dir.unwrap_or_else(|| root_dir.join("outputs").join("ngen"));
     let config_dir = root_dir.join("config");
-    let output_dir = root_dir.join("outputs").join("troute");
+    let output_dir = args.output_dir.unwrap_or_else(|| root_dir.join("outputs").join("troute"));
 
     // Check directories valid
     if !root_dir.exists() || !root_dir.is_dir() {
@@ -57,8 +69,13 @@ pub fn get_args() -> Result<Config> {
         .with_context(|| format!("Failed to access root directory: {:?}", root_dir));
     }
 
+    let dirs_to_check: Vec<&PathBuf> = if args.hf.is_some() {
+        vec![&csv_dir, &output_dir]
+    } else {
+        vec![&csv_dir, &config_dir, &output_dir]
+    };
     let mut missing_dirs = Vec::new();
-    for dir in [&csv_dir, &config_dir, &output_dir] {
+    for dir in dirs_to_check {
         if !dir.exists() || !dir.is_dir() {
             missing_dirs.push(dir);
         }
@@ -71,14 +88,24 @@ pub fn get_args() -> Result<Config> {
         .with_context(|| format!("Failed to access required directories: {:?}", missing_dirs));
     }
 
-    // Find the .gpkg file in the config directory
-    let gpkg_file = config_dir
-        .read_dir()
-        .context("Failed to read config directory")?
-        .filter_map(Result::ok)
-        .find(|entry| entry.path().extension().map_or(false, |ext| ext == "gpkg"))
-        .ok_or_else(|| anyhow::anyhow!("No .gpkg file found in config directory"))?
-        .path();
+    // Use provided gpkg file or find one in the config directory
+    let gpkg_file = if let Some(hf) = args.hf {
+        if !hf.exists() {
+            return Err(anyhow::anyhow!(
+                "Specified hydrofabric file does not exist: {:?}",
+                hf
+            ));
+        }
+        hf
+    } else {
+        config_dir
+            .read_dir()
+            .context("Failed to read config directory")?
+            .filter_map(Result::ok)
+            .find(|entry| entry.path().extension().map_or(false, |ext| ext == "gpkg"))
+            .ok_or_else(|| anyhow::anyhow!("No .gpkg file found in config directory"))?
+            .path()
+    };
     let cfg = Config {
         config_dir,
         csv_dir,
@@ -114,7 +141,7 @@ mod tests {
         let args = Args::parse_from([
             "test",
             "test_route_dir",
-            "-i",
+            "-t",
             "600",
             "-k",
             "t-route-legacy",

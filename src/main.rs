@@ -198,6 +198,7 @@ mod tests {
             internal_timestep_seconds: 300,
             output_dir: std::path::PathBuf::from("./tests/one_cat/outputs/troute"),
             kernel: muskingum::MuskingumCungeKernel::TRouteModernized,
+            num_threads: 1,
         }
     }
 
@@ -498,6 +499,7 @@ mod tests {
             internal_timestep_seconds: 300,
             output_dir: std::path::PathBuf::from("./tests/invalid_test/outputs/troute"),
             kernel: muskingum::MuskingumCungeKernel::TRouteModernized,
+            num_threads: 1,
         };
         let result = run_routing(invalid_config, true);
         assert!(result.is_err());
