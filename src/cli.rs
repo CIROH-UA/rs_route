@@ -42,6 +42,12 @@ pub fn print_banner(config: &Config) {
     );
     eprintln!();
 }
+/// The Config struct holds all the configuration parameters needed for the routing simulation, including:
+///  * Paths to the config directory, input CSV directory, GeoPackage file, and output directory
+///  * Internal timestep in seconds
+///  * Routing kernel to use
+///  * Number of threads for parallel processing
+#[derive(Debug, Clone)]
 pub struct Config {
     pub config_dir: PathBuf,
     pub csv_dir: PathBuf,
@@ -117,6 +123,53 @@ pub fn get_args() -> Result<Config> {
     };
     print_banner(&cfg);
     Ok(cfg)
+}
+
+/// The CfgContext struct is a simplified version of the Config struct that 
+/// contains only the essential parameters needed for the routing simulation, such as the internal timestep, kernel type, and number of threads.
+/// 
+/// Unlike the Config struct, however, it may include additional non-program-argument attributes
+/// that are controlled elsewhere. To facilitate this, it should be passed by reference.
+/// 
+/// By removing the complex types, we can simplify a good portion of function signatures,
+/// while making it significantly easier to add top-down toggles and other control variables
+/// that might be needed at any point in the call stack, without needing to modify a large number
+/// of both function signatures and call sites.
+/// 
+/// When fully implemented, 
+#[allow(unused)]
+#[derive(Debug, Clone, Copy)]
+pub struct CfgContext {
+    pub internal_timestep_seconds: usize,
+    pub kernel: MuskingumCungeKernel,
+    pub num_threads: usize,
+}
+
+impl CfgContext {
+    pub fn from_config(config: &Config) -> Self {
+        Self {
+            internal_timestep_seconds: config.internal_timestep_seconds,
+            kernel: config.kernel,
+            num_threads: config.num_threads,
+        }
+    }
+    /// If the provided arguments are important/different enough, provide a suffix/infix for naming
+    /// the output files and distinguish them from other runs.
+    #[allow(unused)]
+    pub fn flags_identifier(self) -> Option<String> {
+        let mut parts: Vec<String> = Vec::new();
+        // With the current setup, only the kernel type is likely to produce meaningful differences in output, so we only include that for now.
+        // match self.kernel { // Leaving commented for now to avoid a potentially breaking change.
+        //     // PartialEq not implemented, so match statement works.
+        //     MuskingumCungeKernel::TRouteModernized => {}
+        //     _ => parts.push(format!("kernel-{}", self.kernel)),
+        // }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join("_"))
+        }
+    }
 }
 
 #[cfg(test)]
