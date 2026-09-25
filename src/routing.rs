@@ -5,6 +5,7 @@ use crate::io::results::SimulationResults;
 use crate::kernel::muskingum::{MuskingumCungeInput, MuskingumCungeKernel, MuskingumCungeResult};
 use crate::network::NetworkTopology;
 use anyhow::{Context, Result};
+use crossbeam_channel as cb;
 use indicatif::ProgressBar;
 use netcdf::FileMut;
 use rustc_hash::FxHashMap;
@@ -210,11 +211,12 @@ fn writer_thread(
     Ok(())
 }
 
-// Scheduler thread that tracks dependencies and sends ready work
-fn scheduler_thread(
-    topology: Arc<NetworkTopology>,
+// Scheduler that tracks dependencies and sends ready work to the shared queue
+fn run_scheduler(
+    topology: &NetworkTopology,
     scheduler_rx: Receiver<SchedulerMessage>,
-    worker_tx: Vec<Sender<WorkerMessage>>,
+    work_tx: cb::Sender<WorkerMessage>,
+    num_workers: usize,
 ) -> Result<()> {
     // Track which nodes are ready to process
     let mut ready_nodes = VecDeque::new();
@@ -231,18 +233,15 @@ fn scheduler_thread(
         }
     }
 
-    let num_workers = worker_tx.len();
-    let mut next_worker = 0;
     let mut pending_runs = 0;
 
     loop {
         // Send ready work to workers
         while let Some(node_id) = ready_nodes.pop_front() {
-            // Round-robin distribution to workers
-            if let Err(e) = worker_tx[next_worker].send(WorkerMessage::ProcessNode(node_id)) {
-                eprintln!("Failed to send work to worker {}: {}", next_worker, e);
+            // Idle workers pull from the shared queue
+            if let Err(e) = work_tx.send(WorkerMessage::ProcessNode(node_id)) {
+                eprintln!("Failed to send work to workers: {}", e);
             }
-            next_worker = (next_worker + 1) % num_workers;
             pending_runs += 1;
         }
 
@@ -274,8 +273,8 @@ fn scheduler_thread(
     }
 
     // Send shutdown to all workers
-    for tx in &worker_tx {
-        let _ = tx.send(WorkerMessage::Shutdown);
+    for _ in 0..num_workers {
+        let _ = work_tx.send(WorkerMessage::Shutdown);
     }
 
     Ok(())
@@ -306,7 +305,7 @@ fn downsample_results(results: SimulationResults, downsampling: usize) -> Simula
 // Worker thread - now just receives work and processes it
 fn worker_thread(
     kernel: MuskingumCungeKernel,
-    work_rx: Receiver<WorkerMessage>,
+    work_rx: cb::Receiver<WorkerMessage>,
     scheduler_tx: Sender<SchedulerMessage>,
     topology: Arc<NetworkTopology>,
     channel_params_map: Arc<FxHashMap<u32, ChannelParams>>,
@@ -424,14 +423,13 @@ pub fn process_routing_parallel(
         num_threads
     );
 
-    let mut worker_txs = Vec::new();
+    // Single work queue shared by all workers
+    let (work_tx, work_rx) = cb::unbounded();
     let mut worker_handles = Vec::new();
 
     // Spawn worker threads
     for i in 0..num_threads {
-        let (work_tx, work_rx) = mpsc::channel();
-        worker_txs.push(work_tx);
-
+        let work_rx = work_rx.clone();
         let topo = Arc::clone(&topology_arc);
         let params = Arc::clone(&channel_params_arc);
         let writer = writer_tx.clone();
@@ -465,22 +463,15 @@ pub fn process_routing_parallel(
         }
     });
 
-    // Spawn scheduler thread
-    let topo = Arc::clone(&topology_arc);
-    let scheduler_handle = thread::spawn(move || {
-        if let Err(e) = scheduler_thread(topo, scheduler_rx, worker_txs) {
-            eprintln!("Scheduler thread error: {}", e);
-        }
-    });
-
-    // Drop original senders
+    // Drop original senders/receivers
     drop(writer_tx);
     drop(scheduler_tx);
+    drop(work_rx);
+
+    // Run the scheduler on this thread until all nodes are done
+    run_scheduler(&topology_arc, scheduler_rx, work_tx, num_threads)?;
 
     // Wait for all threads to complete
-    scheduler_handle
-        .join()
-        .map_err(|e| anyhow::anyhow!("Scheduler thread panicked: {:?}", e))?;
 
     for (i, handle) in worker_handles.into_iter().enumerate() {
         handle
