@@ -2,7 +2,6 @@ use crate::kernel::muskingum::MuskingumCungeKernel;
 use anyhow::{Context, Result};
 use clap::Parser;
 use colored::Colorize;
-use num_cpus;
 use std::path::PathBuf;
 /// Network routing simulation tool
 #[derive(Parser, Debug)]
@@ -28,7 +27,7 @@ struct Args {
     internal_timestep_seconds: usize,
     #[arg(short, long, default_value_t = MuskingumCungeKernel::TRouteModernized)]
     kernel: MuskingumCungeKernel,
-    #[arg(short, long, default_value_t = num_cpus::get())]
+    #[arg(short, long, default_value_t = std::thread::available_parallelism().map_or(1, |n| n.get()))]
     num_threads: usize,
 }
 pub fn print_banner(config: &Config) {
@@ -60,48 +59,41 @@ pub fn get_args() -> Result<Config> {
     let output_dir = args.output_dir.unwrap_or_else(|| root_dir.join("outputs").join("troute"));
 
     // Check directories valid
-    if !root_dir.exists() || !root_dir.is_dir() {
-        return Err(anyhow::anyhow!(
-            "Given root directory does not exist or is not a directory: {:?}",
-            root_dir
-        ))
-        .with_context(|| format!("Failed to access root directory: {:?}", root_dir));
-    }
+    anyhow::ensure!(
+        root_dir.is_dir(),
+        "Given root directory does not exist or is not a directory: {:?}",
+        root_dir
+    );
 
     let dirs_to_check: Vec<&PathBuf> = if args.hf.is_some() {
         vec![&csv_dir, &output_dir]
     } else {
         vec![&csv_dir, &config_dir, &output_dir]
     };
-    let mut missing_dirs = Vec::new();
-    for dir in dirs_to_check {
-        if !dir.exists() || !dir.is_dir() {
-            missing_dirs.push(dir);
-        }
-    }
-    if !missing_dirs.is_empty() {
-        return Err(anyhow::anyhow!(
-            "Missing required directories: {:?}",
-            missing_dirs
-        ))
-        .with_context(|| format!("Failed to access required directories: {:?}", missing_dirs));
-    }
+    let missing_dirs: Vec<&PathBuf> = dirs_to_check
+        .into_iter()
+        .filter(|dir| !dir.is_dir())
+        .collect();
+    anyhow::ensure!(
+        missing_dirs.is_empty(),
+        "Missing required directories: {:?}",
+        missing_dirs
+    );
 
     // Use provided gpkg file or find one in the config directory
     let gpkg_file = if let Some(hf) = args.hf {
-        if !hf.exists() {
-            return Err(anyhow::anyhow!(
-                "Specified hydrofabric file does not exist: {:?}",
-                hf
-            ));
-        }
+        anyhow::ensure!(
+            hf.exists(),
+            "Specified hydrofabric file does not exist: {:?}",
+            hf
+        );
         hf
     } else {
         config_dir
             .read_dir()
             .context("Failed to read config directory")?
             .filter_map(Result::ok)
-            .find(|entry| entry.path().extension().map_or(false, |ext| ext == "gpkg"))
+            .find(|entry| entry.path().extension().is_some_and(|ext| ext == "gpkg"))
             .ok_or_else(|| anyhow::anyhow!("No .gpkg file found in config directory"))?
             .path()
     };
@@ -152,9 +144,4 @@ mod tests {
         }
     }
     // Impossible to test get_args(), as it pulls from the program's actual command line arguments, which we can't easily manipulate.
-    // #[test]
-    // fn test_get_args_invalid_root() {
-    //     let result = get_args();
-    //     assert!(result.is_err());
-    // }
 }

@@ -1,23 +1,21 @@
 use crate::config::ChannelParams;
 use crate::io::csv::load_external_flows;
-use crate::io::netcdf::write_batch;
+use crate::io::netcdf::NetCdfWriter;
 use crate::io::results::SimulationResults;
-use crate::kernel::muskingum::{MuskingumCungeInput, MuskingumCungeKernel, MuskingumCungeResult};
+use crate::kernel::muskingum::{MuskingumCungeInput, MuskingumCungeKernel};
 use crate::network::NetworkTopology;
 use anyhow::{Context, Result};
-use crossbeam_channel as cb;
+use crossbeam_channel::{self as cb, Receiver, Sender};
 use indicatif::ProgressBar;
-use netcdf::FileMut;
 use rustc_hash::FxHashMap;
 use std::cmp::min;
 use std::collections::VecDeque;
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 
 // Message types
 enum WriterMessage {
-    WriteResults(Arc<SimulationResults>),
+    WriteResults(SimulationResults),
     Shutdown,
 }
 
@@ -31,10 +29,10 @@ enum SchedulerMessage {
     Shutdown,
 }
 
-// Process all timesteps for a single node (unchanged)
+// Process all timesteps for a single node
 fn process_node_all_timesteps(
     kernel: MuskingumCungeKernel,
-    node_id: &u32,
+    node_id: u32,
     topology: &NetworkTopology,
     channel_params: &ChannelParams,
     max_timesteps: usize,
@@ -42,51 +40,35 @@ fn process_node_all_timesteps(
 ) -> Result<SimulationResults> {
     let node = topology
         .nodes
-        .get(node_id)
+        .get(&node_id)
         .ok_or_else(|| anyhow::anyhow!("Node {} not found", node_id))?;
 
-    let mut results = SimulationResults::new(node.id);
-
-    let area = node
-        .area_sqkm
-        .ok_or_else(|| anyhow::anyhow!("Node {} has no area defined", node_id))?;
+    let mut results = SimulationResults::with_capacity(node.id, max_timesteps);
 
     let mut external_flows =
-        load_external_flows(node.qlat_file.clone(), &node.id, Some(&"Q_OUT"), area)?;
+        load_external_flows(&node.qlat_file, node.id, "Q_OUT", node.area_sqkm)?;
 
-    let s0 = if channel_params.s0 == 0.0 {
-        0.00001
-    } else {
-        channel_params.s0
-    };
-    let mut inflow = node
-        .inflow_storage
-        .lock()
-        .map_err(|e| anyhow::anyhow!("Failed to lock inflow storage: {}", e))?;
+    // Empty for headwaters, whose upstream inflow is 0.0
+    let inflow = node.take_inflow()?;
 
-    if inflow.len() == 0 && external_flows.len() == 0 {
+    if inflow.is_empty() && external_flows.is_empty() {
         // if these are both empty then just return all zeros to the results
-        results.flow_data = vec![0.0; max_timesteps];
-        results.velocity_data = vec![0.0; max_timesteps];
-        results.depth_data = vec![0.0; max_timesteps];
+        results.flow_data.resize(max_timesteps, 0.0);
+        results.velocity_data.resize(max_timesteps, 0.0);
+        results.depth_data.resize(max_timesteps, 0.0);
         return Ok(results);
     }
 
-    // if headwater then upstream inflow is 0.0
-    if inflow.len() == 0 {
-        inflow.resize(max_timesteps, 0.0);
-    }
-
-    if external_flows.len() == 0 {
+    if external_flows.is_empty() {
         external_flows.resize(max_timesteps, 0.0);
     } else if external_flows.len() == 1 {
         // Only a single external flow value breaks the upsampling logic,
         // so we throw an error if the file only contains one value (which is likely a mistake)
-        return Err(anyhow::anyhow!(
+        anyhow::bail!(
             "External flow file for node {} only contains one value, which is not sufficient for routing. Please check the file: {:?}",
             node_id,
             node.qlat_file
-        )).with_context(|| format!("Failed to load external flows for node {}: {:?}", node_id, node.qlat_file));
+        );
     }
 
     let mut qup = 0.0;
@@ -96,21 +78,20 @@ fn process_node_all_timesteps(
     let upsampling = max_timesteps / (external_flows.len() - 1);
 
     let mut external_flow = 0.0;
-    // let mut upstream_flow = 0.0;
 
-    for _timestep in 0..max_timesteps {
-        if _timestep % upsampling == 0 {
+    for timestep in 0..max_timesteps {
+        if timestep % upsampling == 0 {
             external_flow = external_flows.pop_front().ok_or_else(|| {
                 anyhow::anyhow!(
                     "Failed to fetch qlateral from file for: {} at timestep {}",
                     node_id,
-                    _timestep
+                    timestep
                 )
             })?;
         }
-        let upstream_flow = inflow.pop_front().unwrap();
+        let upstream_flow = inflow.get(timestep).copied().unwrap_or(0.0);
 
-        let result: MuskingumCungeResult = kernel.exec(
+        let result = kernel.exec(
             &MuskingumCungeInput {
                 dt,
                 qup,
@@ -124,98 +105,48 @@ fn process_node_all_timesteps(
                 n: channel_params.n,
                 n_cc: channel_params.ncc,
                 cs: channel_params.cs,
-                s0,
+                s0: channel_params.s0,
                 velp: 0.0, // unused
                 depthp: depth_p,
             },
             false,
         );
-        let (qdc, velc, depthc) = (result.qdc, result.velc, result.depthc);
-        // let (qdc, velc, depthc, _, _, _) = mc_kernel::submuskingcunge(
-        //     qup,
-        //     upstream_flow,
-        //     qdp,
-        //     external_flow,
-        //     dt,
-        //     s0,
-        //     channel_params.dx,
-        //     channel_params.n,
-        //     channel_params.cs,
-        //     channel_params.bw,
-        //     channel_params.tw,
-        //     channel_params.twcc,
-        //     channel_params.ncc,
-        //     depth_p,
-        //     false,
-        // );
 
-        results.flow_data.push(qdc);
-        results.velocity_data.push(velc);
-        results.depth_data.push(depthc);
+        results.flow_data.push(result.qdc);
+        results.velocity_data.push(result.velc);
+        results.depth_data.push(result.depthc);
 
         qup = upstream_flow;
-        qdp = qdc;
-        depth_p = depthc;
+        qdp = result.qdc;
+        depth_p = result.depthc;
     }
 
     Ok(results)
 }
 
+// Buffers results into batches and appends them to the output file. Runs until
+// told to shut down or until every sender has been dropped.
 fn writer_thread(
     receiver: Receiver<WriterMessage>,
-    output_file: Arc<Mutex<FileMut>>,
+    mut output: NetCdfWriter,
     batch_size: usize, // e.g., 100 nodes
 ) -> Result<()> {
-    let mut batch = Vec::new();
-    // Index of the next feature row to write. Batches can be flushed early (on
-    // timeout) with fewer than batch_size entries, so the write offset has to be
-    // advanced by the number of features actually written, not batch_size.
-    let mut next_feature_idx = 0;
-
-    loop {
-        match receiver.recv_timeout(std::time::Duration::from_millis(100)) {
-            Ok(WriterMessage::WriteResults(results)) => {
-                batch.push(results);
-
-                // Write when batch is full
-                if batch.len() >= batch_size {
-                    write_batch(&output_file, &batch, next_feature_idx)?;
-                    next_feature_idx += batch.len();
-                    batch.clear();
-                }
-            }
-            Ok(WriterMessage::Shutdown) => {
-                // Write remaining batch
-                if !batch.is_empty() {
-                    write_batch(&output_file, &batch, next_feature_idx)?;
-                }
-                break;
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                // Write partial batch on timeout to avoid holding data too long
-                if !batch.is_empty() {
-                    write_batch(&output_file, &batch, next_feature_idx)?;
-                    next_feature_idx += batch.len();
-                    batch.clear();
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                // All senders dropped — normal shutdown
-                if !batch.is_empty() {
-                    write_batch(&output_file, &batch, next_feature_idx)?;
-                }
-                break;
-            }
+    let mut batch = Vec::with_capacity(batch_size);
+    while let Ok(WriterMessage::WriteResults(results)) = receiver.recv() {
+        batch.push(results);
+        if batch.len() >= batch_size {
+            output.append(&batch)?;
+            batch.clear();
         }
     }
-    Ok(())
+    output.append(&batch)
 }
 
 // Scheduler that tracks dependencies and sends ready work to the shared queue
 fn run_scheduler(
     topology: &NetworkTopology,
     scheduler_rx: Receiver<SchedulerMessage>,
-    work_tx: cb::Sender<WorkerMessage>,
+    work_tx: Sender<WorkerMessage>,
     num_workers: usize,
 ) -> Result<()> {
     // Track which nodes are ready to process
@@ -286,104 +217,82 @@ fn downsample_results(results: SimulationResults, downsampling: usize) -> Simula
         return results;
     }
     let actual_timesteps = results.flow_data.len();
-    let mut flow_data = Vec::with_capacity(actual_timesteps / downsampling);
-    let mut velocity_data = Vec::with_capacity(actual_timesteps / downsampling);
-    let mut depth_data = Vec::with_capacity(actual_timesteps / downsampling);
+    let mut downsampled =
+        SimulationResults::with_capacity(results.feature_id, actual_timesteps / downsampling);
     for i in (downsampling - 1..actual_timesteps).step_by(downsampling) {
-        flow_data.push(results.flow_data[i]);
-        velocity_data.push(results.velocity_data[i]);
-        depth_data.push(results.depth_data[i]);
+        downsampled.flow_data.push(results.flow_data[i]);
+        downsampled.velocity_data.push(results.velocity_data[i]);
+        downsampled.depth_data.push(results.depth_data[i]);
     }
-    SimulationResults {
-        feature_id: results.feature_id,
-        flow_data,
-        velocity_data,
-        depth_data,
-    }
+    downsampled
 }
 
-// Worker thread - now just receives work and processes it
-fn worker_thread(
+// Shared, read-only state each worker needs to route a node
+struct WorkerContext {
     kernel: MuskingumCungeKernel,
-    work_rx: cb::Receiver<WorkerMessage>,
-    scheduler_tx: Sender<SchedulerMessage>,
     topology: Arc<NetworkTopology>,
     channel_params_map: Arc<FxHashMap<u32, ChannelParams>>,
     max_timesteps: usize,
     dt: f32,
     downsampling: usize,
     writer_tx: Sender<WriterMessage>,
-    progress_bar: Arc<ProgressBar>,
-) -> Result<()> {
+    scheduler_tx: Sender<SchedulerMessage>,
+    progress_bar: ProgressBar,
+}
+
+impl WorkerContext {
+    // Route one node, pass its flow downstream and send its results to the writer
+    fn process_node(&self, node_id: u32) -> Result<()> {
+        let Some(params) = self.channel_params_map.get(&node_id) else {
+            return Ok(());
+        };
+        match process_node_all_timesteps(
+            self.kernel,
+            node_id,
+            &self.topology,
+            params,
+            self.max_timesteps,
+            self.dt,
+        ) {
+            Ok(results) => {
+                // Pass full-resolution flow to downstream node
+                if let Some(downstream_node) = self
+                    .topology
+                    .nodes
+                    .get(&node_id)
+                    .and_then(|node| self.topology.nodes.get(&node.downstream_id))
+                {
+                    downstream_node
+                        .add_inflow(&results.flow_data)
+                        .context("Failed to update downstream inflow")?;
+                }
+
+                // Downsample then send to writer
+                let downsampled = downsample_results(results, self.downsampling);
+                if let Err(e) = self.writer_tx.send(WriterMessage::WriteResults(downsampled)) {
+                    eprintln!("Failed to send results to writer: {}", e);
+                }
+            }
+            Err(e) => {
+                eprintln!("Error processing node {}: {:#}", node_id, e);
+                self.writer_tx.send(WriterMessage::Shutdown).ok();
+                self.scheduler_tx.send(SchedulerMessage::Shutdown).ok();
+            }
+        }
+        self.progress_bar.inc(1);
+        Ok(())
+    }
+}
+
+// Worker thread - receives work from the shared queue and processes it
+fn worker_thread(ctx: WorkerContext, work_rx: Receiver<WorkerMessage>) -> Result<()> {
     loop {
         match work_rx.recv() {
             Ok(WorkerMessage::ProcessNode(node_id)) => {
-                // Process the node
-                if let Some(params) = channel_params_map.get(&node_id) {
-                    match process_node_all_timesteps(
-                        kernel,
-                        &node_id,
-                        &topology,
-                        params,
-                        max_timesteps,
-                        dt,
-                    ) {
-                        Ok(results) => {
-                            // Pass full-resolution flow to downstream node
-                            if let Some(node) = topology.nodes.get(&node_id) {
-                                if let Some(downstream_node) =
-                                    topology.nodes.get(&node.downstream_id)
-                                {
-                                    let mut buffer =
-                                        downstream_node.inflow_storage.lock().map_err(|e| {
-                                            anyhow::anyhow!(
-                                                "Failed to lock downstream buffer: {}",
-                                                e
-                                            )
-                                        })?;
-                                    if buffer.is_empty() {
-                                        buffer.resize(results.flow_data.len(), 0.0);
-                                    }
-                                    for (i, &flow) in results.flow_data.iter().enumerate() {
-                                        if i < buffer.len() {
-                                            buffer[i] += flow;
-                                        }
-                                    }
-                                }
-
-                                // Free inflow storage memory
-                                let mut old_inflow = node.inflow_storage.lock().map_err(|e| {
-                                    anyhow::anyhow!("Failed to lock inflow storage: {}", e)
-                                })?;
-                                *old_inflow = VecDeque::new();
-                            }
-
-                            // Downsample then send to writer
-                            let downsampled = downsample_results(results, downsampling);
-                            if let Err(e) =
-                                writer_tx.send(WriterMessage::WriteResults(Arc::new(downsampled)))
-                            {
-                                eprintln!("Failed to send results to writer: {}", e);
-                            }
-                        }
-                        Err(e) => {
-                            let mut error_message =
-                                format!("Error processing node {}: {}", node_id, e);
-                            // if error context, elaborate on it
-                            if let Some(context) = e.chain().skip(1).next() {
-                                error_message.push_str(&format!("\nContext: {}", context));
-                            }
-                            eprintln!("{}", error_message);
-                            writer_tx.send(WriterMessage::Shutdown).ok();
-                            scheduler_tx.send(SchedulerMessage::Shutdown).ok();
-                        }
-                    }
-
-                    progress_bar.inc(1);
-                }
+                ctx.process_node(node_id)?;
 
                 // Notify scheduler that node is complete
-                if let Err(e) = scheduler_tx.send(SchedulerMessage::NodeCompleted(node_id)) {
+                if let Err(e) = ctx.scheduler_tx.send(SchedulerMessage::NodeCompleted(node_id)) {
                     eprintln!("Failed to notify scheduler of completion: {}", e);
                 }
             }
@@ -405,19 +314,16 @@ pub fn process_routing_parallel(
     max_timesteps: usize,
     dt: f32,
     downsampling: usize,
-    output_file: Arc<Mutex<FileMut>>,
-    progress_bar: Arc<ProgressBar>,
+    output: NetCdfWriter,
+    progress_bar: ProgressBar,
     num_threads: usize,
 ) -> Result<()> {
     let total_nodes = topology.nodes.len();
-    let topology_arc = topology;
-    let channel_params_arc = channel_params_map;
 
     // Create channels
-    let (writer_tx, writer_rx) = mpsc::channel();
-    let (scheduler_tx, scheduler_rx) = mpsc::channel();
+    let (writer_tx, writer_rx) = cb::unbounded();
+    let (scheduler_tx, scheduler_rx) = cb::unbounded();
 
-    // Create worker channels
     println!(
         "Using {} worker threads for parallel processing",
         num_threads
@@ -429,36 +335,30 @@ pub fn process_routing_parallel(
 
     // Spawn worker threads
     for i in 0..num_threads {
+        let ctx = WorkerContext {
+            kernel,
+            topology: Arc::clone(&topology),
+            channel_params_map: Arc::clone(&channel_params_map),
+            max_timesteps,
+            dt,
+            downsampling,
+            writer_tx: writer_tx.clone(),
+            scheduler_tx: scheduler_tx.clone(),
+            progress_bar: progress_bar.clone(),
+        };
         let work_rx = work_rx.clone();
-        let topo = Arc::clone(&topology_arc);
-        let params = Arc::clone(&channel_params_arc);
-        let writer = writer_tx.clone();
-        let scheduler = scheduler_tx.clone();
-        let pb = Arc::clone(&progress_bar);
 
         let handle = thread::spawn(move || {
-            if let Err(e) = worker_thread(
-                kernel,
-                work_rx,
-                scheduler,
-                topo,
-                params,
-                max_timesteps,
-                dt,
-                downsampling,
-                writer,
-                pb,
-            ) {
+            if let Err(e) = worker_thread(ctx, work_rx) {
                 eprintln!("Worker {} error: {}", i, e);
             }
         });
         worker_handles.push(handle);
     }
 
-    // Spawn writer thread
-    let output_file_clone = Arc::clone(&output_file);
+    // Spawn writer thread; it owns the output file from here on
     let writer_handle = thread::spawn(move || {
-        if let Err(e) = writer_thread(writer_rx, output_file_clone, min(100, total_nodes)) {
+        if let Err(e) = writer_thread(writer_rx, output, min(100, total_nodes)) {
             eprintln!("Writer thread error: {}", e);
         }
     });
@@ -469,10 +369,9 @@ pub fn process_routing_parallel(
     drop(work_rx);
 
     // Run the scheduler on this thread until all nodes are done
-    run_scheduler(&topology_arc, scheduler_rx, work_tx, num_threads)?;
+    run_scheduler(&topology, scheduler_rx, work_tx, num_threads)?;
 
     // Wait for all threads to complete
-
     for (i, handle) in worker_handles.into_iter().enumerate() {
         handle
             .join()

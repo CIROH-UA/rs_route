@@ -2,73 +2,69 @@ use crate::config::{ChannelParams, ColumnConfig};
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 use rustc_hash::FxHashMap;
-use std::collections::VecDeque;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::thread;
 
 // Network node representing a catchment/nexus
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct NetworkNode {
     pub id: u32,
     pub downstream_id: u32,
-    pub area_sqkm: Option<f32>,
+    pub area_sqkm: f32,
     pub qlat_file: PathBuf,
-    pub inflow_storage: Arc<Mutex<VecDeque<f32>>>,
+    // Summed full-resolution outflow of all upstream nodes; empty for headwaters
+    inflow_storage: Mutex<Vec<f32>>,
 }
 
 impl NetworkNode {
-    pub fn new(id: u32, downstream_id: u32, area_sqkm: Option<f32>, qlat_file: PathBuf) -> Self {
-        NetworkNode {
-            id,
-            downstream_id,
-            area_sqkm,
-            qlat_file,
-            inflow_storage: Arc::new(Mutex::new(VecDeque::new())),
+    // Add an upstream node's outflow to this node's inflow
+    pub fn add_inflow(&self, flows: &[f32]) -> Result<()> {
+        let mut buffer = self
+            .inflow_storage
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to lock inflow storage: {}", e))?;
+        if buffer.is_empty() {
+            buffer.resize(flows.len(), 0.0);
         }
+        for (b, &f) in buffer.iter_mut().zip(flows) {
+            *b += f;
+        }
+        Ok(())
+    }
+
+    // Move the accumulated inflow out, freeing the node's storage
+    pub fn take_inflow(&self) -> Result<Vec<f32>> {
+        let mut buffer = self
+            .inflow_storage
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to lock inflow storage: {}", e))?;
+        Ok(std::mem::take(&mut *buffer))
     }
 }
 
 // Network topology
-#[derive(Debug, Clone)]
+#[derive(Debug, Default)]
 pub struct NetworkTopology {
     pub nodes: FxHashMap<u32, NetworkNode>,
     pub upstream_counts: FxHashMap<u32, usize>,
 }
 
-impl NetworkTopology {
-    pub fn new() -> Self {
-        NetworkTopology {
-            nodes: FxHashMap::default(),
-            upstream_counts: FxHashMap::default(),
-        }
-    }
-
-    pub fn add_node(
-        &mut self,
-        id: u32,
-        downstream_id: u32,
-        area_sqkm: Option<f32>,
-        qlat_file: PathBuf,
-    ) {
-        let node = NetworkNode::new(id, downstream_id, area_sqkm, qlat_file);
-        self.nodes.insert(id, node);
-    }
-
-    pub fn build_upstream_connections(&mut self) {
-        for node in self.nodes.values() {
-            *self.upstream_counts.entry(node.downstream_id).or_insert(0) += 1;
-        }
-    }
+// Parse the numeric part of a hydrofabric ID such as "wb-123" or "nex-456"
+fn parse_prefixed_id(id: &str) -> Result<u32> {
+    id.split('-')
+        .nth(1)
+        .and_then(|s| s.parse::<u32>().ok())
+        .ok_or_else(|| anyhow::anyhow!("Invalid ID format: {}", id))
 }
 
 // Function to build network topology from database
 pub fn build_network_topology(
     conn: &Connection,
     config: &ColumnConfig,
-    csv_dir: &PathBuf,
+    csv_dir: &Path,
 ) -> Result<NetworkTopology> {
-    let mut topology = NetworkTopology::new();
+    let mut topology = NetworkTopology::default();
 
     let network_query = format!(
         "SELECT {}, {}, areasqkm FROM 'flowpaths' WHERE {} IS NOT NULL",
@@ -88,25 +84,24 @@ pub fn build_network_topology(
 
     for row in rows {
         let (id, downstream_id, area_sqkm) = row.context("Failed to read row")?;
+        let id = parse_prefixed_id(&id)?;
+        let downstream_id = parse_prefixed_id(&downstream_id)?;
 
-        let n_id = id
-            .split('-')
-            .nth(1)
-            .and_then(|s| s.parse::<u32>().ok())
-            .ok_or_else(|| anyhow::anyhow!("Invalid ID format: {}", id))?;
-
-        let n_downstream_id = downstream_id
-            .split('-')
-            .nth(1)
-            .and_then(|s| s.parse::<u32>().ok())
-            .ok_or_else(|| anyhow::anyhow!("Invalid toID format: {}", downstream_id))?;
-
-        let qlat_file_path = csv_dir.join(format!("cat-{}.csv", n_id));
-        topology.add_node(n_id, n_downstream_id, Some(area_sqkm), qlat_file_path);
+        topology.nodes.insert(
+            id,
+            NetworkNode {
+                id,
+                downstream_id,
+                area_sqkm,
+                qlat_file: csv_dir.join(format!("cat-{}.csv", id)),
+                inflow_storage: Mutex::new(Vec::new()),
+            },
+        );
     }
 
-    // Build upstream connections
-    topology.build_upstream_connections();
+    for node in topology.nodes.values() {
+        *topology.upstream_counts.entry(node.downstream_id).or_insert(0) += 1;
+    }
 
     println!("Network topology built with {} nodes", topology.nodes.len());
 
@@ -147,13 +142,17 @@ pub fn load_channel_parameters(
                 .and_then(|s| s.parse::<u32>().ok())
                 .ok_or(rusqlite::Error::InvalidQuery)?;
 
+            // A zero slope breaks the kernel, so clamp it to a small minimum
+            let s0: f32 = row.get(4)?;
+            let s0 = if s0 == 0.0 { 0.00001 } else { s0 };
+
             Ok((
                 id,
                 ChannelParams {
                     dx: row.get(1)?,
                     n: row.get(2)?,
                     ncc: row.get(3)?,
-                    s0: row.get(4)?,
+                    s0,
                     bw: row.get(5)?,
                     tw: row.get(6)?,
                     twcc: row.get(7)?,
@@ -167,40 +166,28 @@ pub fn load_channel_parameters(
     Ok(channel_params_map)
 }
 
+fn open_db(db_path: &Path) -> Result<Connection> {
+    Connection::open(db_path).with_context(|| format!("Failed to open database: {:?}", db_path))
+}
+
 // Build the network topology and load channel parameters together. Both are
 // independent full-table scans against the same read-only gpkg, so each gets
 // its own connection (rusqlite::Connection isn't Sync) and runs on its own thread.
 pub fn load_network(
-    db_path: &PathBuf,
+    db_path: &Path,
     config: &ColumnConfig,
-    csv_dir: &PathBuf,
+    csv_dir: &Path,
 ) -> Result<(NetworkTopology, FxHashMap<u32, ChannelParams>)> {
-    let topology_handle = {
-        let db_path = db_path.clone();
-        let csv_dir = csv_dir.clone();
-        let config = config.clone();
-        thread::spawn(move || -> Result<NetworkTopology> {
-            let conn = Connection::open(&db_path)
-                .with_context(|| format!("Failed to open database: {:?}", db_path))?;
-            build_network_topology(&conn, &config, &csv_dir)
-        })
-    };
-    let params_handle = {
-        let db_path = db_path.clone();
-        let config = config.clone();
-        thread::spawn(move || -> Result<FxHashMap<u32, ChannelParams>> {
-            let conn = Connection::open(&db_path)
-                .with_context(|| format!("Failed to open database: {:?}", db_path))?;
-            load_channel_parameters(&conn, &config)
-        })
-    };
-
-    let topology = topology_handle
-        .join()
-        .map_err(|_| anyhow::anyhow!("Network topology thread panicked"))??;
-    let mut channel_params_map = params_handle
-        .join()
-        .map_err(|_| anyhow::anyhow!("Channel parameters thread panicked"))??;
+    let (topology, channel_params_map) = thread::scope(|s| {
+        let topology_handle =
+            s.spawn(|| build_network_topology(&open_db(db_path)?, config, csv_dir));
+        let params_handle = s.spawn(|| load_channel_parameters(&open_db(db_path)?, config));
+        (topology_handle.join(), params_handle.join())
+    });
+    let topology =
+        topology.map_err(|_| anyhow::anyhow!("Network topology thread panicked"))??;
+    let mut channel_params_map =
+        channel_params_map.map_err(|_| anyhow::anyhow!("Channel parameters thread panicked"))??;
 
     // Keep only parameters for nodes actually in the network, and report coverage
     channel_params_map.retain(|id, _| topology.nodes.contains_key(id));
