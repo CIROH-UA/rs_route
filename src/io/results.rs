@@ -8,12 +8,12 @@ pub struct SimulationResults {
 }
 
 impl SimulationResults {
-    pub fn new(feature_id: u32) -> Self {
+    pub fn with_capacity(feature_id: u32, capacity: usize) -> Self {
         SimulationResults {
             feature_id,
-            flow_data: Vec::new(),
-            velocity_data: Vec::new(),
-            depth_data: Vec::new(),
+            flow_data: Vec::with_capacity(capacity),
+            velocity_data: Vec::with_capacity(capacity),
+            depth_data: Vec::with_capacity(capacity),
         }
     }
 }

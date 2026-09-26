@@ -36,14 +36,6 @@ impl ColumnConfig {
     }
 }
 
-// Output format configuration
-#[derive(Debug, Clone)]
-pub enum OutputFormat {
-    Csv,
-    NetCdf,
-    Both,
-}
-
 // Channel parameters from SQLite
 #[derive(Debug, Clone)]
 pub struct ChannelParams {
